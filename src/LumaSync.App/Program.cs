@@ -19,6 +19,7 @@ internal static class Program
     private const int UiLogicalWidth = NativeUiWindowPolicy.LogicalWidth, UiLogicalHeight = NativeUiWindowPolicy.LogicalHeight;
     private const int PickerLogicalWidth = 700, PickerLogicalHeight = 500;
     private const uint PickerWindowStyle = 0x00C80000, PickerExtendedWindowStyle = 0x00000080;
+    private const int EmbeddedApplicationIconResourceId = 32512;
     private const uint NotifyIconAdd = 0, NotifyIconModify = 1, NotifyIconDelete = 2;
     private const uint NotifyFlagMessage = 1, NotifyFlagIcon = 2, NotifyFlagTip = 4;
     private const int TrayIconId = 1, TrayCommandOpen = 1001, TrayCommandToggle = 1002, TrayCommandExit = 1003;
@@ -145,15 +146,12 @@ internal static class Program
             NativeUiWindowPolicy.ResizableWindowStyle, 120, 70, initialSize.Width, initialSize.Height,
             IntPtr.Zero, IntPtr.Zero, instance, IntPtr.Zero);
         if (window == IntPtr.Zero) { ReleaseSingleInstanceMutex(); return 4; }
-        var iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "LumaSync.ico");
-        if (File.Exists(iconPath))
+        trayIconHandle = LoadImage(instance, new IntPtr(EmbeddedApplicationIconResourceId),
+            1, 0, 0, 0x0010);
+        if (trayIconHandle != IntPtr.Zero)
         {
-            trayIconHandle = LoadImage(IntPtr.Zero, iconPath, 1, 0, 0, 0x0010);
-            if (trayIconHandle != IntPtr.Zero)
-            {
-                _ = SendMessage(window, 0x0080, IntPtr.Zero, trayIconHandle);
-                _ = SendMessage(window, 0x0080, new IntPtr(1), trayIconHandle);
-            }
+            _ = SendMessage(window, 0x0080, IntPtr.Zero, trayIconHandle);
+            _ = SendMessage(window, 0x0080, new IntPtr(1), trayIconHandle);
         }
         trayAvailable = AddTrayIcon(window);
         SetCaption(window, "LumaSync · Screen Sync");
@@ -2072,7 +2070,7 @@ internal static class Program
     [DllImport("user32.dll", EntryPoint = "GetWindowTextLengthW", ExactSpelling = true)] private static extern int GetWindowTextLength(IntPtr hwnd);
     [DllImport("user32.dll", SetLastError = true)] private static extern UIntPtr SetTimer(IntPtr hwnd, UIntPtr timerId, uint milliseconds, IntPtr callback);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool KillTimer(IntPtr hwnd, UIntPtr timerId);
-    [DllImport("user32.dll", EntryPoint = "LoadImageW", CharSet = CharSet.Unicode, ExactSpelling = true)] private static extern IntPtr LoadImage(IntPtr instance, string name, uint type, int width, int height, uint flags);
+    [DllImport("user32.dll", EntryPoint = "LoadImageW", ExactSpelling = true)] private static extern IntPtr LoadImage(IntPtr instance, IntPtr name, uint type, int width, int height, uint flags);
     [DllImport("shell32.dll", EntryPoint = "Shell_NotifyIconW", CharSet = CharSet.Unicode, ExactSpelling = true)] private static extern bool Shell_NotifyIcon(uint message, ref NotifyIconData data);
     [DllImport("user32.dll", EntryPoint = "RegisterWindowMessageW", CharSet = CharSet.Unicode, ExactSpelling = true)] private static extern uint RegisterWindowMessage(string message);
     [DllImport("user32.dll")] private static extern IntPtr CreatePopupMenu();
