@@ -1,6 +1,6 @@
 # LumaSync
 
-LumaSync is an offline Windows ambient-lighting controller. It samples the edges of a selected display and sends spatially mapped colors to a supported USB HID LED controller. The application is written in C# and uses a compact Win32 user interface to keep its desktop footprint small.
+LumaSync is an independent, low-memory replacement for the DX Light Windows application, focused on offline ambient lighting control. It samples the edges of a selected display and sends spatially mapped colors to a supported USB HID LED controller. The application is written in C# and uses a compact Win32 user interface to keep its desktop footprint small.
 
 ## What it does
 
