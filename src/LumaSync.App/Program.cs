@@ -20,6 +20,7 @@ internal static class Program
     private const int PickerLogicalWidth = 700, PickerLogicalHeight = 500;
     private const uint PickerWindowStyle = 0x00C80000, PickerExtendedWindowStyle = 0x00000080;
     private const int EmbeddedApplicationIconResourceId = 32512;
+    private const uint LoadImageDefaultSize = 0x0040;
     private const uint NotifyIconAdd = 0, NotifyIconModify = 1, NotifyIconDelete = 2;
     private const uint NotifyFlagMessage = 1, NotifyFlagIcon = 2, NotifyFlagTip = 4;
     private const int TrayIconId = 1, TrayCommandOpen = 1001, TrayCommandToggle = 1002, TrayCommandExit = 1003;
@@ -147,7 +148,7 @@ internal static class Program
             IntPtr.Zero, IntPtr.Zero, instance, IntPtr.Zero);
         if (window == IntPtr.Zero) { ReleaseSingleInstanceMutex(); return 4; }
         trayIconHandle = LoadImage(instance, new IntPtr(EmbeddedApplicationIconResourceId),
-            1, 0, 0, 0x0010);
+            1, 0, 0, LoadImageDefaultSize);
         if (trayIconHandle != IntPtr.Zero)
         {
             _ = SendMessage(window, 0x0080, IntPtr.Zero, trayIconHandle);
