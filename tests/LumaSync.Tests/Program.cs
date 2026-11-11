@@ -28,6 +28,24 @@ Check(SettingsResetPolicy.Reset(settings with { Brightness = 10 }) == settings, 
 Check(OutputPacing.EffectiveRate(75, 3) == 75 && OutputPacing.EffectiveRate(75, 1) == 30, "Capture and output pacing rates");
 Check(new ColorRgb(200, 100, 50).Scale(.5) == new ColorRgb(100, 50, 25), "Brightness scaling");
 
+var audioLayout = layout.ToArray();
+var audioColors = new ColorRgb[audioLayout.Length];
+var silentBands = new float[8];
+var leftOnly = new AudioAnalysis(.4f, silentBands, silentBands, silentBands, .8f, 0);
+AudioEffectEngine.RenderInto(leftOnly, audioLayout, audioColors);
+var leftEdgeLit = audioLayout.Select((point, index) => (point, color: audioColors[index]))
+    .Count(item => item.point.Edge == LedEdge.Left && item.color != default);
+var rightEdgeLitByLeft = audioLayout.Select((point, index) => (point, color: audioColors[index]))
+    .Count(item => item.point.Edge == LedEdge.Right && item.color != default);
+Check(leftEdgeLit == 14 && rightEdgeLitByLeft == 0, "Music Sync pans left-channel audio to the left edge");
+var stereo = new AudioAnalysis(.8f, silentBands, silentBands, silentBands, .8f, .8f);
+AudioEffectEngine.RenderInto(stereo, audioLayout, audioColors);
+Check(audioColors.All(color => color != default), "Music Sync can illuminate every LED at high audio level");
+var quietStereo = new AudioAnalysis(.05f, silentBands, silentBands, silentBands, .05f, .05f);
+AudioEffectEngine.RenderInto(quietStereo, audioLayout, audioColors, sensitivity: 2);
+var quietLitCount = audioColors.Count(color => color != default);
+Check(quietLitCount is > 0 and < 54, "Quiet music produces a dim partial progression without filling the strip");
+
 const int width = 32, height = 32, stride = width * 4;
 var pixels = new byte[stride * height];
 for (var i = 0; i < pixels.Length; i += 4)
