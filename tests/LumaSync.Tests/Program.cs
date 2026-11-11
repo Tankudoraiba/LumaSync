@@ -22,6 +22,8 @@ Check(layout[0].Edge == LedEdge.Left && layout[0].U < .1 && layout[0].V > .5, "D
 Check(NativeUiWindowPolicy.CanResize(NativeUiWindowPolicy.ResizableWindowStyle) && !NativeUiWindowPolicy.CanMaximize(NativeUiWindowPolicy.ResizableWindowStyle), "Window allows controlled resizing without maximize");
 
 var settings = new AppSettings();
+Check(settings.CaptureRate == 75 && OutputPacing.EffectiveRate(settings.CaptureRate, settings.OutputRate) == 75,
+    "Default Screen Sync captures and sends frames at the 75 Hz monitor rate");
 Check(AppSettings.TryParse(settings.ToJson(), out var parsed, out _) && parsed == settings, "Settings JSON roundtrip");
 Check(!AppSettings.TryParse("""{"Top":999}""", out _, out _), "Invalid settings rejected");
 Check(SettingsResetPolicy.Reset(settings with { Brightness = 10 }) == settings, "Reset returns the complete default settings profile");

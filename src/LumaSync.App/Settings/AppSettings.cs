@@ -9,7 +9,7 @@ public sealed record AppSettings(
     bool Clockwise = true, LedCorner StartCorner = LedCorner.BottomLeft,
     double Brightness = 100, double Smoothing = 0, double SamplingDepth = 8,
     double Gamma = 1, double Saturation = 100,
-    int CaptureRate = 75, int OutputRate = 0, string? DisplayDeviceName = null, double ColorTemperature = 6500,
+    int CaptureRate = 75, int OutputRate = 3, string? DisplayDeviceName = null, double ColorTemperature = 6500,
     bool DetectLetterbox = false, int SchemaVersion = 7,
     double CropLeftPercent = 0, double CropRightPercent = 0, double CropTopPercent = 0, double CropBottomPercent = 0,
     bool StartMinimizedToTray = false, bool LightingEnabled = false,
