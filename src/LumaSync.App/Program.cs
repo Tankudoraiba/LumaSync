@@ -14,9 +14,11 @@ internal static class Program
         WindowMessageEndSession = 0x0016;
     private const uint PickerMessagePaint = 0x000F, PickerMessageEraseBackground = 0x0014,
         PickerMessageClose = 0x0010, PickerMessageDestroy = 0x0002,
-        PickerMessageLeftButtonDown = 0x0201, PickerMessageLeftButtonUp = 0x0202,
+        PickerMessageSize = 0x0005, PickerMessageLeftButtonDown = 0x0201, PickerMessageLeftButtonUp = 0x0202,
         PickerMessageMouseMove = 0x0200, PickerMessageKeyDown = 0x0100;
     private const int UiLogicalWidth = NativeUiWindowPolicy.LogicalWidth, UiLogicalHeight = NativeUiWindowPolicy.LogicalHeight;
+    private const int PickerLogicalWidth = 700, PickerLogicalHeight = 500;
+    private const uint PickerWindowStyle = 0x00C80000, PickerExtendedWindowStyle = 0x00000080;
     private const uint NotifyIconAdd = 0, NotifyIconModify = 1, NotifyIconDelete = 2;
     private const uint NotifyFlagMessage = 1, NotifyFlagIcon = 2, NotifyFlagTip = 4;
     private const int TrayIconId = 1, TrayCommandOpen = 1001, TrayCommandToggle = 1002, TrayCommandExit = 1003;
@@ -509,15 +511,17 @@ internal static class Program
         pendingPickerColor = ParseStaticColor(settings.StaticColorHex);
         activeColorSlider = -1;
         colorPickerOwner = owner;
+        var pickerSize = GetOuterWindowSize(PickerLogicalWidth, PickerLogicalHeight,
+            PickerWindowStyle, PickerExtendedWindowStyle);
         var x = 160;
         var y = 100;
         if (GetWindowRect(owner, out var ownerRect))
         {
-            x = ownerRect.Left + Math.Max(0, (ownerRect.Right - ownerRect.Left - 720) / 2);
-            y = ownerRect.Top + Math.Max(0, (ownerRect.Bottom - ownerRect.Top - 560) / 2);
+            x = ownerRect.Left + Math.Max(0, (ownerRect.Right - ownerRect.Left - pickerSize.Width) / 2);
+            y = ownerRect.Top + Math.Max(0, (ownerRect.Bottom - ownerRect.Top - pickerSize.Height) / 2);
         }
-        colorPickerWindow = CreateWindowEx(0x00000080, pickerClass.ClassName,
-            "LumaSync · Custom Color", 0x00C80000, x, y, 720, 560,
+        colorPickerWindow = CreateWindowEx(PickerExtendedWindowStyle, pickerClass.ClassName,
+            "LumaSync · Custom Color", PickerWindowStyle, x, y, pickerSize.Width, pickerSize.Height,
             owner, IntPtr.Zero, pickerClass.Instance, IntPtr.Zero);
         if (colorPickerWindow == IntPtr.Zero)
         {
@@ -541,6 +545,9 @@ internal static class Program
             {
                 case PickerMessageEraseBackground:
                     return new IntPtr(1);
+                case PickerMessageSize:
+                    InvalidateRect(hwnd, IntPtr.Zero, false);
+                    return IntPtr.Zero;
                 case PickerMessagePaint:
                     PaintColorPicker(hwnd);
                     return IntPtr.Zero;
@@ -640,7 +647,8 @@ internal static class Program
         var clientY = unchecked((short)(((long)lParam >> 16) & 0xFFFF));
         if (!GetClientRect(hwnd, out var client) || client.Right <= 0 || client.Bottom <= 0)
             return (clientX, clientY);
-        return new NativeUiCoordinateTransform(700, 500, client.Right, client.Bottom).ToLogical(clientX, clientY);
+        return new NativeUiCoordinateTransform(PickerLogicalWidth, PickerLogicalHeight,
+            client.Right, client.Bottom).ToLogical(clientX, clientY);
     }
 
     private static void UpdatePickerSliderFromX(int x)
@@ -683,13 +691,13 @@ internal static class Program
             DeleteObject(physicalBrush);
 
             _ = SetMapMode(hdc, 7);
-            _ = SetWindowExtEx(hdc, 700, 500, IntPtr.Zero);
-            var scale = Math.Min(client.Right / 700d, client.Bottom / 500d);
-            var viewportWidth = Math.Max(1, (int)Math.Round(700 * scale));
-            var viewportHeight = Math.Max(1, (int)Math.Round(500 * scale));
+            _ = SetWindowExtEx(hdc, PickerLogicalWidth, PickerLogicalHeight, IntPtr.Zero);
+            var scale = Math.Min(client.Right / (double)PickerLogicalWidth, client.Bottom / (double)PickerLogicalHeight);
+            var viewportWidth = Math.Max(1, (int)Math.Round(PickerLogicalWidth * scale));
+            var viewportHeight = Math.Max(1, (int)Math.Round(PickerLogicalHeight * scale));
             _ = SetViewportExtEx(hdc, viewportWidth, viewportHeight, IntPtr.Zero);
             _ = SetViewportOrgEx(hdc, (client.Right - viewportWidth) / 2, (client.Bottom - viewportHeight) / 2, IntPtr.Zero);
-            var background = new Rect { Right = 700, Bottom = 500 };
+            var background = new Rect { Right = PickerLogicalWidth, Bottom = PickerLogicalHeight };
             var backgroundBrush = CreateSolidBrush(PaletteBackground);
             FillRect(hdc, ref background, backgroundBrush);
             DeleteObject(backgroundBrush);
@@ -1710,10 +1718,11 @@ internal static class Program
         paintBufferWidth = paintBufferHeight = 0;
     }
 
-    private static (int Width, int Height) GetOuterWindowSize(int clientWidth, int clientHeight)
+    private static (int Width, int Height) GetOuterWindowSize(int clientWidth, int clientHeight,
+        uint style = NativeUiWindowPolicy.ResizableWindowStyle, uint exStyle = 0)
     {
         var bounds = new Rect { Right = clientWidth, Bottom = clientHeight };
-        if (!AdjustWindowRectEx(ref bounds, NativeUiWindowPolicy.ResizableWindowStyle, false, 0))
+        if (!AdjustWindowRectEx(ref bounds, style, false, exStyle))
             return (clientWidth + 16, clientHeight + 48);
         return (bounds.Right - bounds.Left, bounds.Bottom - bounds.Top);
     }

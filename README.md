@@ -1,51 +1,48 @@
 # LumaSync
 
-LumaSync is an independent, low-memory replacement for the DX Light Windows application, focused on offline ambient lighting control. It samples the edges of a selected display and sends spatially mapped colors to a supported USB HID LED controller. The application is written in C# and uses a compact Win32 user interface to keep its desktop footprint small.
+LumaSync is a working, independent low-memory replacement for the DX Light Windows application. It provides offline ambient lighting for a USB LED strip, including real-time screen sync, static colors, lighting effects, and local desktop-audio mode.
 
-## What it does
+The app uses a compact native Windows interface and processes display and audio data on the PC. It does not upload or save captured screen frames or audio.
 
-- Screen Sync samples edge regions and maps them to the configured LED layout.
-- The default layout is 26 top, 14 right, no bottom, and 14 left LEDs, starting at the bottom-left and proceeding clockwise.
-- Static color and built-in lighting and music effects are available in the current native UI.
-- It supports display selection, color and sampling controls, import/export and reset of settings, optional startup registration, and tray behavior.
-- The UI can resize while maintaining its designed aspect ratio; it repaints as the client size changes.
-- Screen capture and desktop-audio loopback stay on the PC. Captured frames and audio are not saved by the app.
+## Features
 
-## Hardware
+- Real-time screen-edge sampling with a separate color region for each LED.
+- LED layout, monitor selection, crop, sampling depth, brightness, smoothing, saturation, gamma, and color temperature controls.
+- Static color picker, built-in effects, and desktop-audio reactive lighting.
+- On/off control, saved settings, reset and import/export, notification-area controls, and optional startup with Windows.
+- Resizable interface that maintains its designed proportions and redraws on resize.
+- Local-only operation with no telemetry, account, advertisements, or automatic updater.
 
-The implementation was developed against a USB HID controller reported as VID `1A86`, PID `FE07`, device identifier `000603`, firmware `1.8.5`, with 54 LEDs. The configured physical layout is the 54-LED arrangement above. Other controllers and firmware are not assumed compatible.
+The default strip layout is 26 LEDs across the top, 14 down the right, 14 up the left, and none along the bottom, starting at the bottom-left and proceeding clockwise.
 
-A short controlled hardware run measured 30, 60, and 75 frame updates per second for three seconds per rate, with approximately 10 ms average write time. This is evidence that the device accepted those short runs; it is not a long-duration stability or full-screen gaming benchmark. See [PROTOCOL.md](PROTOCOL.md) and [TESTING.md](TESTING.md).
+## Compatible controller
 
-## Privacy
+LumaSync works with the 54-LED USB HID controller identified as VID `1A86`, PID `FE07`, device `000603`, firmware `1.8.5`. The lighting frame output supports 30, 60, and 75 Hz targets. Other controller models and firmware are not claimed as compatible.
 
-LumaSync has no telemetry, cloud service, account, or update client. It does not require administrator privileges for normal use. Settings are stored locally under `%LOCALAPPDATA%\LumaSync\settings.json`; user-initiated import/export uses a JSON file. Optional Windows startup is a per-user Run registry entry and is off unless enabled in the app. The screen and audio pipelines are local.
+## Privacy and settings
 
-## Build
+Settings are stored locally at `%LOCALAPPDATA%\LumaSync\settings.json`. Startup registration is optional and uses the current user's Windows startup entry. Normal operation does not require administrator privileges or an internet connection.
 
-Requirements: Windows 10 or 11, .NET 10 SDK, and network access to restore the pinned Vortice package on the first build. Normal operation is offline. A Windows Desktop .NET 10 runtime is required when using the framework-dependent release.
+## Build and run
+
+Requirements: Windows 10 or 11 and the .NET 10 SDK. The framework-dependent release requires the .NET 10 Windows Desktop Runtime. Package restore is needed for the first build; the application itself works offline.
 
 ```powershell
 dotnet build .\LumaSync.slnx -c Release
-dotnet run --project .\tests\LumaSync.Tests\LumaSync.Tests.csproj -c Release
+dotnet run --project .\src\LumaSync.App\LumaSync.App.csproj -c Release
 dotnet publish .\src\LumaSync.App\LumaSync.App.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o .\publish
 ```
 
-The executable is `publish\LumaSync.exe`. The project includes a Windows GitHub Actions workflow that builds, runs the test harness, and uploads a publish artifact.
+The published executable is `publish\LumaSync.exe`. A Windows GitHub Actions workflow builds the app and publishes an x64 artifact.
 
-## Status
+## Project layout
 
-This is an early standalone rebrand of a working low-memory implementation. Core mapping, processing, settings, UI policies, and device packet behavior have automated checks. The known 54-LED controller has been exercised directly. Visual validation on other display scaling settings, long-duration 75 Hz operation under game load, non-silent audio behavior, HDR edge cases, and other controllers remain unverified.
-
-## Repository map
-
-- `src/LumaSync.App`: native Win32 UI, DXGI capture, color processing, HID device code, local settings.
-- `tests/LumaSync.Tests`: dependency-light executable regression test harness.
-- `SECURITY_REPORT.md`: replacement security and privacy review.
-- `ARCHITECTURE.md`: module boundaries and data flow.
-- `PROTOCOL.md`: confirmed controller facts and known limits.
-- `TESTING.md`: automated and hardware test scope.
+- `src/LumaSync.App`: Windows UI, display capture, color processing, HID controller, audio loopback, and settings.
+- `tests/LumaSync.Tests`: automated regression checks for core behavior.
+- `ARCHITECTURE.md`: application components and data flow.
+- `PROTOCOL.md`: supported controller and lighting frame format.
+- `THIRD_PARTY_NOTICES.md`: external package information.
 
 ## License
 
-MIT. See [LICENSE](LICENSE). The application depends on Vortice.Direct3D11, which is restored from NuGet under its own license; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+MIT. See [LICENSE](LICENSE).
