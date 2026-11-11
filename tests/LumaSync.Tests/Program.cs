@@ -15,6 +15,20 @@ Check(frame[^1] == checksum, "Frame checksum");
 Check(ScreenSyncFrameBuilder.ToWindowsHidReports(frame).Count == 5, "HID report chunk count");
 try { _ = ScreenSyncFrameBuilder.Build(ledColors, 0); throw new InvalidOperationException("Reserved sequence accepted"); }
 catch (ArgumentOutOfRangeException) { }
+var shutdownFrame = ShutdownFrameSender.BuildBlackFrame(54, 8);
+Check(shutdownFrame.Length == 277 && shutdownFrame[0] == 0x53 && shutdownFrame[1] == 0x43,
+    "Windows shutdown builds a complete 54-LED SC frame");
+for (var i = 0; i < 54; i++)
+{
+    var offset = 6 + i * 5;
+    Check(shutdownFrame[offset] == i + 1 && shutdownFrame[offset + 1] == 0
+        && shutdownFrame[offset + 2] == 0 && shutdownFrame[offset + 3] == 0,
+        $"Shutdown packet turns LED {i + 1} off");
+}
+Check(WindowClosePolicy.ShouldMinimizeToTray(true, true, false, false, false)
+    && !WindowClosePolicy.ShouldMinimizeToTray(true, true, false, false, true)
+    && !WindowClosePolicy.ShouldMinimizeToTray(true, true, false, true, false),
+    "Windows shutdown and explicit tray exit bypass close-to-tray behavior");
 
 var layout = new LayoutOptions().Create();
 Check(layout.Count == 54 && layout.Count(x => x.Edge == LedEdge.Top) == 26 && layout.Count(x => x.Edge == LedEdge.Right) == 14 && layout.Count(x => x.Edge == LedEdge.Left) == 14, "Default 54 LED edge layout");

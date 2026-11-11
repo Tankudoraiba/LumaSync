@@ -1483,9 +1483,7 @@ internal static class Program
                 {
                     try
                     {
-                        var shutdownColors = new ColorRgb[controller.Info.LedCount];
-                        var shutdownFrame = new byte[7 + shutdownColors.Length * 5];
-                        ScreenSyncFrameBuilder.BuildInto(shutdownColors, NextSequence(), shutdownFrame);
+                        var shutdownFrame = ShutdownFrameSender.BuildBlackFrame(controller.Info.LedCount, NextSequence());
                         controller.WriteScreenSyncFrame(shutdownFrame);
                     }
                     catch (Exception) { }
