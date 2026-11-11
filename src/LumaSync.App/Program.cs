@@ -94,6 +94,7 @@ internal static class Program
     private static readonly uint ActivateExistingMessage = RegisterWindowMessage(ActivateExistingMessageName);
     private static long effectStartedTimestamp = Stopwatch.GetTimestamp();
     private static int forceOutputRefresh = 1;
+    private static long captureRetryAt;
     private static readonly uint TaskbarCreatedMessage = RegisterWindowMessage("TaskbarCreated");
 
     private static int Main()
@@ -183,7 +184,11 @@ internal static class Program
                     {
                         StartCaptureWorker(hwnd);
                     }
-                    catch (Exception ex) { status = "DXGI unavailable: " + ex.Message; }
+                    catch (Exception ex)
+                    {
+                        status = "DXGI unavailable: " + ex.Message;
+                        Interlocked.Exchange(ref captureRetryAt, Stopwatch.GetTimestamp() + 3 * Stopwatch.Frequency);
+                    }
                     SetCaption(hwnd, "LumaSync · Screen Sync");
                     return IntPtr.Zero;
                 case WindowMessageLeftButtonUp:
@@ -311,6 +316,7 @@ internal static class Program
                     if (wParam == new UIntPtr(DiagnosticsTimerId))
                     {
                         UpdateDiagnosticRates();
+                        TryRestartStoppedCapture(hwnd);
                         if (showDiagnostics) InvalidateRect(hwnd, IntPtr.Zero, false);
                         return IntPtr.Zero;
                     }
@@ -1056,6 +1062,7 @@ internal static class Program
     private static void StartCaptureWorker(IntPtr hwnd)
     {
         capture = DxgiCaptureSurface.Open(displayName);
+        Interlocked.Exchange(ref captureRetryAt, 0);
         Interlocked.Exchange(ref processedFrames, 0);
         Interlocked.Exchange(ref queuedFrames, 0);
         Interlocked.Exchange(ref changedFrames, 0);
@@ -1082,6 +1089,25 @@ internal static class Program
         var cancellationToken = captureCancellation.Token;
         status = $"DXGI active on {displayName} · {selectedDisplay.Bounds.Width}×{selectedDisplay.Bounds.Height}";
         captureTask = Task.Run(() => CaptureLoop(hwnd, openedCapture, cancellationToken));
+    }
+
+    private static void TryRestartStoppedCapture(IntPtr hwnd)
+    {
+        var task = captureTask;
+        if (task is { IsCompleted: false }) return;
+        var retryAt = Interlocked.Read(ref captureRetryAt);
+        if (retryAt == 0 || Stopwatch.GetTimestamp() < retryAt) return;
+        try
+        {
+            captureTask = null;
+            StartCaptureWorker(hwnd);
+        }
+        catch (Exception ex)
+        {
+            status = "Screen capture reconnecting · " + ex.Message;
+            Interlocked.Exchange(ref captureRetryAt, Stopwatch.GetTimestamp() + 3 * Stopwatch.Frequency);
+            InvalidateRect(hwnd, IntPtr.Zero, false);
+        }
     }
 
     private static bool StopCaptureWorker()
@@ -1474,6 +1500,7 @@ internal static class Program
             catch (Exception ex)
             {
                 status = "Screen capture stopped: " + ex.Message;
+                Interlocked.Exchange(ref captureRetryAt, Stopwatch.GetTimestamp() + 3 * Stopwatch.Frequency);
                 InvalidateRect(hwnd, IntPtr.Zero, false);
             }
             finally
