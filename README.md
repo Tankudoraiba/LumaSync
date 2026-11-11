@@ -25,7 +25,7 @@ Settings are stored locally at `%LOCALAPPDATA%\LumaSync\settings.json`. Startup 
 
 ## Build and run
 
-Requirements: Windows 10 or 11 and the .NET 10 SDK. The framework-dependent release requires the .NET 10 Windows Desktop Runtime. Package restore is needed for the first build; the application itself works offline.
+Requirements: Windows 10 or 11 and the .NET 10 SDK. The framework-dependent release requires the .NET 10 x64 runtime installed separately. Package restore is needed for the first build; the application itself works offline.
 
 ```powershell
 dotnet build .\LumaSync.slnx -c Release
