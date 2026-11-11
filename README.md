@@ -17,7 +17,7 @@ The default strip layout is 26 LEDs across the top, 14 down the right, 14 up the
 
 ## Compatible controller
 
-LumaSync works with the 54-LED USB HID controller identified as VID `1A86`, PID `FE07`, device `000603`, firmware `1.8.5`. The lighting frame output supports 30, 60, and 75 Hz targets. Other controller models and firmware are not claimed as compatible.
+LumaSync works with the 54-LED USB HID controller identified as VID `1A86`, PID `FE07`, device `000603`, firmware `1.8.5`. By default, capture and LED output both target 75 Hz for the 75 Hz monitor. You can change the capture and output rates to 30, 60, or 75 Hz. Other controller models and firmware are not claimed as compatible.
 
 ## Privacy and settings
 
