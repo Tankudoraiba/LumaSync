@@ -15,9 +15,9 @@ internal static class Program
     private const uint PickerMessagePaint = 0x000F, PickerMessageEraseBackground = 0x0014,
         PickerMessageClose = 0x0010, PickerMessageDestroy = 0x0002,
         PickerMessageSize = 0x0005, PickerMessageLeftButtonDown = 0x0201, PickerMessageLeftButtonUp = 0x0202,
-        PickerMessageMouseMove = 0x0200, PickerMessageKeyDown = 0x0100;
+        PickerMessageMouseMove = 0x0200, PickerMessageKeyDown = 0x0100, PickerMessageChar = 0x0102;
     private const int UiLogicalWidth = NativeUiWindowPolicy.LogicalWidth, UiLogicalHeight = NativeUiWindowPolicy.LogicalHeight;
-    private const int PickerLogicalWidth = 700, PickerLogicalHeight = 500;
+    private const int PickerLogicalWidth = 700, PickerLogicalHeight = 640;
     private const uint PickerWindowStyle = 0x00C80000, PickerExtendedWindowStyle = 0x00000080;
     private const int EmbeddedApplicationIconResourceId = 32512;
     private const uint LoadImageDefaultSize = 0x0040;
@@ -64,6 +64,7 @@ internal static class Program
     private static string status = "Starting DXGI capture…";
     private static int reportedControllerLedCount;
     private static byte sequence = 1;
+    private static int calibrationPreviewColorPacked = -1;
     private static IntPtr window;
     private static IntPtr paintBufferDc, paintBufferBitmap, paintBufferPreviousBitmap;
     private static int paintBufferWidth, paintBufferHeight;
@@ -71,6 +72,8 @@ internal static class Program
     private static int pickerBufferWidth, pickerBufferHeight;
     private static IntPtr colorPickerWindow, colorPickerOwner;
     private static ColorRgb pendingPickerColor;
+    private static string pendingHexText = string.Empty;
+    private static bool hexInputActive;
     private static int activeColorSlider = -1;
     private static CancellationTokenSource? captureCancellation;
     private static Task? captureTask;
@@ -514,6 +517,8 @@ internal static class Program
         }
 
         pendingPickerColor = ParseStaticColor(settings.StaticColorHex);
+        pendingHexText = $"#{settings.StaticColorHex.ToUpperInvariant()}";
+        hexInputActive = false;
         activeColorSlider = -1;
         colorPickerOwner = owner;
         var pickerSize = GetOuterWindowSize(PickerLogicalWidth, PickerLogicalHeight,
@@ -559,6 +564,15 @@ internal static class Program
                 case PickerMessageLeftButtonDown:
                 {
                     var (x, y) = ColorPickerClientPoint(hwnd, lParam);
+                    hexInputActive = x is >= 150 and <= 660 && y is >= 76 and < 118;
+                    if (hexInputActive)
+                    {
+                        pendingHexText = "#";
+                        activeColorSlider = -1;
+                        _ = SetFocus(hwnd);
+                        InvalidateRect(hwnd, IntPtr.Zero, false);
+                        return IntPtr.Zero;
+                    }
                     var slider = ColorPickerSliderAt(x, y);
                     if (slider >= 0)
                     {
@@ -576,8 +590,33 @@ internal static class Program
                     }
                     return IntPtr.Zero;
                 case PickerMessageKeyDown:
-                    if (wParam.ToUInt32() == 0x1B) DestroyWindow(hwnd); // Escape cancels.
+                    if (wParam.ToUInt32() == 0x1B) { ClearCalibrationPreview(); DestroyWindow(hwnd); } // Escape cancels.
                     else if (wParam.ToUInt32() == 0x0D) ApplyPickerColor(hwnd); // Enter applies.
+                    return IntPtr.Zero;
+                case PickerMessageChar:
+                    if (hexInputActive)
+                    {
+                        var character = (char)wParam.ToUInt32();
+                        if (character == '\b')
+                        {
+                            if (pendingHexText.Length > 1) pendingHexText = pendingHexText[..^1];
+                        }
+                        else if (Uri.IsHexDigit(character) && pendingHexText.Length < 7)
+                        {
+                            pendingHexText += char.ToUpperInvariant(character);
+                        }
+                        else return IntPtr.Zero;
+
+                        var digits = pendingHexText.TrimStart('#');
+                        if (digits.Length == 6 && uint.TryParse(digits,
+                                System.Globalization.NumberStyles.HexNumber,
+                                System.Globalization.CultureInfo.InvariantCulture, out var packed))
+                        {
+                            pendingPickerColor = new ColorRgb((byte)(packed >> 16), (byte)(packed >> 8), (byte)packed);
+                        }
+                        InvalidateRect(hwnd, IntPtr.Zero, false);
+                        if (colorPickerOwner != IntPtr.Zero) InvalidateRect(colorPickerOwner, IntPtr.Zero, false);
+                    }
                     return IntPtr.Zero;
                 case PickerMessageLeftButtonUp:
                 {
@@ -591,27 +630,76 @@ internal static class Program
                     var (x, y) = ColorPickerClientPoint(hwnd, lParam);
                     for (var i = 0; i < BaseColorPresets.All.Count; i++)
                     {
-                        var left = 40 + i * 128;
-                        if (x < left || x >= left + 112 || y < 132 || y >= 176) continue;
+                        var left = 40 + i % 4 * 155;
+                        var top = 132 + i / 4 * 48;
+                        if (x < left || x >= left + 145 || y < top || y >= top + 42) continue;
                         var preset = BaseColorPresets.All[i];
                         pendingPickerColor = ParseStaticColor(preset.Hex);
+                        pendingHexText = $"#{preset.Hex.ToUpperInvariant()}";
+                        hexInputActive = false;
+                        Interlocked.Exchange(ref calibrationPreviewColorPacked,
+                            pendingPickerColor.R << 16 | pendingPickerColor.G << 8 | pendingPickerColor.B);
+                        Interlocked.Exchange(ref forceOutputRefresh, 1);
                         InvalidateRect(hwnd, IntPtr.Zero, false);
+                        if (colorPickerOwner != IntPtr.Zero) InvalidateRect(colorPickerOwner, IntPtr.Zero, false);
                         return IntPtr.Zero;
                     }
 
-                    if (y is >= 430 and < 478 && x is >= 40 and < 335)
+                    if (y is >= 566 and < 616 && x is >= 40 and < 185)
                     {
                         ApplyPickerColor(hwnd);
                         return IntPtr.Zero;
                     }
-                    if (y is >= 430 and < 478 && x is >= 365 and < 660)
+                    if (y is >= 440 and < 548 && x is >= 40 and < 660)
                     {
+                        var band = (y - 440) / 38;
+                        if ((y - 440) % 38 >= 32) return IntPtr.Zero;
+                        var column = Math.Clamp((x - 40) / 124, 0, 4);
+                        var localX = (x - 40) % 124;
+                        if (localX < 26) AdjustHueCorrection(colorPickerOwner, band, column, -1);
+                        else if (localX >= 98) AdjustHueCorrection(colorPickerOwner, band, column, 1);
+                        else return IntPtr.Zero;
+                        InvalidateRect(hwnd, IntPtr.Zero, false);
+                        return IntPtr.Zero;
+                    }
+                    if (y is >= 566 and < 616 && x is >= 195 and < 340)
+                    {
+                        var updated = settings with
+                        {
+                            HueCorrectionRedGain = 100,
+                            HueCorrectionGreenGain = 100,
+                            HueCorrectionBlueGain = 100,
+                            HueCorrection2RedGain = 100,
+                            HueCorrection2GreenGain = 100,
+                            HueCorrection2BlueGain = 100,
+                            HueCorrection3RedGain = 100,
+                            HueCorrection3GreenGain = 100,
+                            HueCorrection3BlueGain = 100
+                        };
+                        Interlocked.Exchange(ref forceOutputRefresh, 1);
+                        SaveSettingsChange(colorPickerOwner, updated, "Hue correction gains reset");
+                        InvalidateRect(hwnd, IntPtr.Zero, false);
+                        return IntPtr.Zero;
+                    }
+                    if (y is >= 566 and < 616 && x is >= 350 and < 495)
+                    {
+                        ClearCalibrationPreview();
+                        pendingPickerColor = ParseStaticColor(settings.StaticColorHex);
+                        pendingHexText = $"#{settings.StaticColorHex.ToUpperInvariant()}";
+                        hexInputActive = false;
+                        InvalidateRect(hwnd, IntPtr.Zero, false);
+                        return IntPtr.Zero;
+                    }
+                    if (y is >= 566 and < 616 && x is >= 505 and < 660)
+                    {
+                        ClearCalibrationPreview();
                         DestroyWindow(hwnd);
                         return IntPtr.Zero;
                     }
                     return IntPtr.Zero;
                 }
                 case PickerMessageClose:
+                    ClearCalibrationPreview();
                     DestroyWindow(hwnd);
                     return IntPtr.Zero;
                 case PickerMessageDestroy:
@@ -642,7 +730,7 @@ internal static class Program
 
     private static int ColorPickerSliderAt(int x, int y)
     {
-        var row = y switch { >= 198 and < 258 => 0, >= 266 and < 326 => 1, >= 334 and < 394 => 2, _ => -1 };
+        var row = y switch { >= 240 and < 300 => 0, >= 304 and < 364 => 1, >= 368 and < 428 => 2, _ => -1 };
         return row >= 0 && x is >= 150 and <= 560 ? row : -1;
     }
 
@@ -666,16 +754,111 @@ internal static class Program
             1 => pendingPickerColor with { G = value },
             _ => pendingPickerColor with { B = value }
         };
+        pendingHexText = $"#{pendingPickerColor.R:X2}{pendingPickerColor.G:X2}{pendingPickerColor.B:X2}";
         if (colorPickerWindow != IntPtr.Zero) InvalidateRect(colorPickerWindow, IntPtr.Zero, false);
     }
 
+    private static void AdjustHueCorrection(IntPtr owner, int band, int parameter, int direction)
+    {
+        var current = settings;
+        var updated = band switch
+        {
+            0 => parameter switch
+            {
+                0 => current with { HueCorrectionStart = Math.Clamp(current.HueCorrectionStart + direction * 5, 0, current.HueCorrectionEnd - 5) },
+                1 => current with { HueCorrectionEnd = Math.Clamp(current.HueCorrectionEnd + direction * 5, current.HueCorrectionStart + 5, 360) },
+                2 => current with { HueCorrectionRedGain = Math.Clamp(current.HueCorrectionRedGain + direction * 5, 0, 200) },
+                3 => current with { HueCorrectionGreenGain = Math.Clamp(current.HueCorrectionGreenGain + direction * 5, 0, 200) },
+                _ => current with { HueCorrectionBlueGain = Math.Clamp(current.HueCorrectionBlueGain + direction * 5, 0, 200) }
+            },
+            1 => parameter switch
+            {
+                0 => current with { HueCorrection2Start = Math.Clamp(current.HueCorrection2Start + direction * 5, 0, current.HueCorrection2End - 5) },
+                1 => current with { HueCorrection2End = Math.Clamp(current.HueCorrection2End + direction * 5, current.HueCorrection2Start + 5, 360) },
+                2 => current with { HueCorrection2RedGain = Math.Clamp(current.HueCorrection2RedGain + direction * 5, 0, 200) },
+                3 => current with { HueCorrection2GreenGain = Math.Clamp(current.HueCorrection2GreenGain + direction * 5, 0, 200) },
+                _ => current with { HueCorrection2BlueGain = Math.Clamp(current.HueCorrection2BlueGain + direction * 5, 0, 200) }
+            },
+            _ => parameter switch
+            {
+                0 => current with { HueCorrection3Start = Math.Clamp(current.HueCorrection3Start + direction * 5, 0, current.HueCorrection3End - 5) },
+                1 => current with { HueCorrection3End = Math.Clamp(current.HueCorrection3End + direction * 5, current.HueCorrection3Start + 5, 360) },
+                2 => current with { HueCorrection3RedGain = Math.Clamp(current.HueCorrection3RedGain + direction * 5, 0, 200) },
+                3 => current with { HueCorrection3GreenGain = Math.Clamp(current.HueCorrection3GreenGain + direction * 5, 0, 200) },
+                _ => current with { HueCorrection3BlueGain = Math.Clamp(current.HueCorrection3BlueGain + direction * 5, 0, 200) }
+            }
+        };
+        if (updated == current) return;
+        Interlocked.Exchange(ref forceOutputRefresh, 1);
+        SaveSettingsChange(owner, updated, $"Hue band {band + 1} saved");
+    }
+
+    private static void ApplyOutputColorGains(Span<ColorRgb> colors, AppSettings correction)
+    {
+        var hasBand1 = correction.HueCorrectionRedGain != 100 || correction.HueCorrectionGreenGain != 100 || correction.HueCorrectionBlueGain != 100;
+        var hasBand2 = correction.HueCorrection2RedGain != 100 || correction.HueCorrection2GreenGain != 100 || correction.HueCorrection2BlueGain != 100;
+        var hasBand3 = correction.HueCorrection3RedGain != 100 || correction.HueCorrection3GreenGain != 100 || correction.HueCorrection3BlueGain != 100;
+        if (!hasBand1 && !hasBand2 && !hasBand3) return;
+        for (var i = 0; i < colors.Length; i++)
+        {
+            var color = colors[i];
+            if (hasBand1 && IsHueInRange(color, correction.HueCorrectionStart, correction.HueCorrectionEnd))
+                colors[i] = ApplyGains(color, correction.HueCorrectionRedGain, correction.HueCorrectionGreenGain, correction.HueCorrectionBlueGain);
+            else if (hasBand2 && IsHueInRange(color, correction.HueCorrection2Start, correction.HueCorrection2End))
+                colors[i] = ApplyGains(color, correction.HueCorrection2RedGain, correction.HueCorrection2GreenGain, correction.HueCorrection2BlueGain);
+            else if (hasBand3 && IsHueInRange(color, correction.HueCorrection3Start, correction.HueCorrection3End))
+                colors[i] = ApplyGains(color, correction.HueCorrection3RedGain, correction.HueCorrection3GreenGain, correction.HueCorrection3BlueGain);
+        }
+    }
+
+    private static ColorRgb ApplyGains(ColorRgb color, int red, int green, int blue) =>
+        new(ScaleChannel(color.R, red), ScaleChannel(color.G, green), ScaleChannel(color.B, blue));
+
+    private static bool IsHueInRange(ColorRgb color, int hueStart, int hueEnd)
+    {
+        var maximum = Math.Max(color.R, Math.Max(color.G, color.B));
+        var minimum = Math.Min(color.R, Math.Min(color.G, color.B));
+        var delta = maximum - minimum;
+        if (delta < 24) return false;
+        double hue;
+        if (maximum == color.R)
+        {
+            hue = 60d * (color.G - color.B) / delta;
+            if (hue < 0) hue += 360;
+        }
+        else if (maximum == color.G) hue = 60d * (color.B - color.R) / delta + 120;
+        else hue = 60d * (color.R - color.G) / delta + 240;
+        return hue >= hueStart && hue <= hueEnd;
+    }
+
+    private static byte ScaleChannel(byte value, int gain) =>
+        (byte)Math.Clamp((int)Math.Round(value * gain / 100d), 0, 255);
+
     private static void ApplyPickerColor(IntPtr hwnd)
     {
+        var hexDigits = pendingHexText.Trim().TrimStart('#');
+        if (hexDigits.Length != 6 || !uint.TryParse(hexDigits,
+                System.Globalization.NumberStyles.HexNumber,
+                System.Globalization.CultureInfo.InvariantCulture, out _))
+        {
+            status = "Enter exactly six hexadecimal digits before saving the color.";
+            InvalidateRect(hwnd, IntPtr.Zero, false);
+            return;
+        }
         var hex = $"{pendingPickerColor.R:X2}{pendingPickerColor.G:X2}{pendingPickerColor.B:X2}";
+        ClearCalibrationPreview();
+        hexInputActive = false;
         Interlocked.Exchange(ref forceOutputRefresh, 1);
         if (colorPickerOwner != IntPtr.Zero)
             SaveSettingsChange(colorPickerOwner, settings with { StaticColorHex = hex }, $"Custom base color · #{hex}");
         DestroyWindow(hwnd);
+    }
+
+    private static void ClearCalibrationPreview()
+    {
+        if (Interlocked.Exchange(ref calibrationPreviewColorPacked, -1) < 0) return;
+        Interlocked.Exchange(ref forceOutputRefresh, 1);
+        if (colorPickerOwner != IntPtr.Zero) InvalidateRect(colorPickerOwner, IntPtr.Zero, false);
     }
 
     private static void PaintColorPicker(IntPtr hwnd)
@@ -721,33 +904,69 @@ internal static class Program
             FillRect(hdc, ref preview, previewBrush);
             DeleteObject(previewBrush);
             SetTextColor(hdc, PaletteText);
-            var colorReadout = new Rect { Left = 150, Top = 76, Right = 660, Bottom = 118 };
-            DrawText(hdc, $"#{pendingPickerColor.R:X2}{pendingPickerColor.G:X2}{pendingPickerColor.B:X2}   ·   R {pendingPickerColor.R,3}   G {pendingPickerColor.G,3}   B {pendingPickerColor.B,3}",
-                -1, ref colorReadout, TextButtonCentered);
+            var hexField = new Rect { Left = 150, Top = 76, Right = 660, Bottom = 118 };
+            var hexBrush = CreateSolidBrush(hexInputActive ? PaletteButton : PalettePanel);
+            FillRect(hdc, ref hexField, hexBrush);
+            DeleteObject(hexBrush);
+            SetTextColor(hdc, PaletteText);
+            DrawText(hdc, hexInputActive ? $"HEX  {pendingHexText}|   ·   type 6 hex digits" : $"HEX  {pendingHexText}   ·   click to enter a hex color",
+                -1, ref hexField, TextButtonCentered);
 
             for (var i = 0; i < BaseColorPresets.All.Count; i++)
             {
                 var preset = BaseColorPresets.All[i];
-                var left = 40 + i * 128;
-                var swatchButton = new Rect { Left = left, Top = 132, Right = left + 112, Bottom = 176 };
+                var left = 40 + i % 4 * 155;
+                var top = 132 + i / 4 * 48;
+                var swatchButton = new Rect { Left = left, Top = top, Right = left + 145, Bottom = top + 42 };
                 var presetBrush = CreateSolidBrush(PaletteButton);
                 FillRect(hdc, ref swatchButton, presetBrush);
                 DeleteObject(presetBrush);
                 var presetColor = ParseStaticColor(preset.Hex);
-                var presetSwatch = new Rect { Left = left + 7, Top = 143, Right = left + 28, Bottom = 164 };
+                var presetSwatch = new Rect { Left = left + 7, Top = top + 10, Right = left + 28, Bottom = top + 31 };
                 var presetColorBrush = CreateSolidBrush(ColorRef(presetColor));
                 FillRect(hdc, ref presetSwatch, presetColorBrush);
                 DeleteObject(presetColorBrush);
                 SetTextColor(hdc, PaletteText);
-                var presetName = new Rect { Left = left + 32, Top = 132, Right = left + 108, Bottom = 176 };
+                var presetName = new Rect { Left = left + 32, Top = top, Right = left + 141, Bottom = top + 42 };
                 DrawText(hdc, preset.Name, -1, ref presetName, TextButtonCentered);
             }
 
-            DrawColorChannelSlider(hdc, 0, "RED", pendingPickerColor.R, 198);
-            DrawColorChannelSlider(hdc, 1, "GREEN", pendingPickerColor.G, 266);
-            DrawColorChannelSlider(hdc, 2, "BLUE", pendingPickerColor.B, 334);
-            DrawColorPickerButton(hdc, new Rect { Left = 40, Top = 430, Right = 335, Bottom = 478 }, "APPLY COLOR", PaletteActive);
-            DrawColorPickerButton(hdc, new Rect { Left = 365, Top = 430, Right = 660, Bottom = 478 }, "CANCEL", PaletteButton);
+            SetTextColor(hdc, PaletteAccentTeal);
+            var presetHeading = new Rect { Left = 40, Top = 116, Right = 660, Bottom = 132 };
+            DrawText(hdc, "CALIBRATION COLORS  ·  CLICK TO PREVIEW ON LEDS", -1, ref presetHeading, TextButtonCentered);
+
+            DrawColorChannelSlider(hdc, 0, "RED", pendingPickerColor.R, 240);
+            DrawColorChannelSlider(hdc, 1, "GREEN", pendingPickerColor.G, 304);
+            DrawColorChannelSlider(hdc, 2, "BLUE", pendingPickerColor.B, 368);
+            SetTextColor(hdc, PaletteAccentTeal);
+            var correction = settings;
+            var gainHeading = new Rect { Left = 40, Top = 410, Right = 660, Bottom = 438 };
+            DrawText(hdc, "SAVED HUE CORRECTIONS  ·  THREE INDEPENDENT BANDS  ·  PER-BAND RGB GAINS", -1, ref gainHeading, TextButtonCentered);
+            var correctionValues = new[]
+            {
+                new[] { $"H1 LO {correction.HueCorrectionStart}°", $"H1 HI {correction.HueCorrectionEnd}°", $"R {correction.HueCorrectionRedGain}%", $"G {correction.HueCorrectionGreenGain}%", $"B {correction.HueCorrectionBlueGain}%" },
+                new[] { $"H2 LO {correction.HueCorrection2Start}°", $"H2 HI {correction.HueCorrection2End}°", $"R {correction.HueCorrection2RedGain}%", $"G {correction.HueCorrection2GreenGain}%", $"B {correction.HueCorrection2BlueGain}%" },
+                new[] { $"H3 LO {correction.HueCorrection3Start}°", $"H3 HI {correction.HueCorrection3End}°", $"R {correction.HueCorrection3RedGain}%", $"G {correction.HueCorrection3GreenGain}%", $"B {correction.HueCorrection3BlueGain}%" }
+            };
+            for (var band = 0; band < correctionValues.Length; band++)
+            {
+                var rowY = 440 + band * 38;
+                for (var parameter = 0; parameter < correctionValues[band].Length; parameter++)
+                {
+                    var x = 40 + parameter * 124;
+                    var minus = new Rect { Left = x, Top = rowY, Right = x + 24, Bottom = rowY + 32 };
+                    var value = new Rect { Left = x + 25, Top = rowY, Right = x + 99, Bottom = rowY + 32 };
+                    var plus = new Rect { Left = x + 100, Top = rowY, Right = x + 124, Bottom = rowY + 32 };
+                    DrawColorPickerButton(hdc, minus, "−", PaletteButton);
+                    DrawColorPickerButton(hdc, plus, "+", PaletteButton);
+                    SetTextColor(hdc, PaletteSecondary);
+                    DrawText(hdc, correctionValues[band][parameter], -1, ref value, TextButtonCentered);
+                }
+            }
+            DrawColorPickerButton(hdc, new Rect { Left = 40, Top = 566, Right = 185, Bottom = 616 }, "SAVE COLOR", PaletteActive);
+            DrawColorPickerButton(hdc, new Rect { Left = 195, Top = 566, Right = 340, Bottom = 616 }, "NEUTRAL RGB", PaletteButton);
+            DrawColorPickerButton(hdc, new Rect { Left = 350, Top = 566, Right = 495, Bottom = 616 }, "STOP PREVIEW", PaletteButton);
+            DrawColorPickerButton(hdc, new Rect { Left = 505, Top = 566, Right = 660, Bottom = 616 }, "CLOSE", PaletteButton);
             if (usePickerBuffer)
             {
                 _ = SetMapMode(pickerBufferDc, 1);
@@ -1369,7 +1588,8 @@ internal static class Program
                         }
                         continue;
                     }
-                    var modeIndex = frameSettings.ModeIndex;
+                    var previewColorPacked = Volatile.Read(ref calibrationPreviewColorPacked);
+                    var modeIndex = previewColorPacked >= 0 ? 5 : frameSettings.ModeIndex;
                     if (modeIndex != 4 && audioCapture is not null)
                     {
                         audioCapture.Dispose();
@@ -1455,7 +1675,10 @@ internal static class Program
                         }
                         else if (modeIndex == 5)
                         {
-                            ledColors.AsSpan().Fill(ParseStaticColor(frameSettings.StaticColorHex).Scale(frameSettings.Brightness / 100d));
+                            var staticColor = previewColorPacked >= 0
+                                ? new ColorRgb((byte)(previewColorPacked >> 16), (byte)(previewColorPacked >> 8), (byte)previewColorPacked)
+                                : ParseStaticColor(frameSettings.StaticColorHex);
+                            ledColors.AsSpan().Fill(staticColor.Scale(frameSettings.Brightness / 100d));
                         }
                     }
                     catch (DxgiFrameUnavailableException)
@@ -1463,6 +1686,7 @@ internal static class Program
                         Interlocked.Increment(ref droppedCaptureFrames);
                         continue;
                     }
+                    ApplyOutputColorGains(ledColors, frameSettings);
                     Interlocked.Exchange(ref lastProcessingTicks, Stopwatch.GetTimestamp() - processingStarted);
                     if (modeIndex != 0 || source.LastFrameWasUpdated) Interlocked.Increment(ref processedFrames);
                     var frameChanged = !ledColors.AsSpan().SequenceEqual(previousColors);
@@ -2116,6 +2340,7 @@ internal static class Program
     [DllImport("comdlg32.dll", EntryPoint = "GetSaveFileNameW", CharSet = CharSet.Unicode, SetLastError = true)] private static extern bool GetSaveFileName(ref OpenFileName dialog);
     [DllImport("comdlg32.dll", EntryPoint = "CommDlgExtendedError", ExactSpelling = true)] private static extern uint CommDlgExtendedError();
     [DllImport("user32.dll")] private static extern bool InvalidateRect(IntPtr hwnd, IntPtr rect, bool erase);
+    [DllImport("user32.dll")] private static extern IntPtr SetFocus(IntPtr hwnd);
     [DllImport("user32.dll")] private static extern bool InvalidateRect(IntPtr hwnd, ref Rect rect, bool erase);
     [DllImport("user32.dll")] private static extern bool GetClientRect(IntPtr hwnd, out Rect rect);
     [DllImport("user32.dll")] private static extern IntPtr BeginPaint(IntPtr hwnd, out PaintStruct paint);

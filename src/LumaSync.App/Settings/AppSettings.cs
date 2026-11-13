@@ -10,10 +10,16 @@ public sealed record AppSettings(
     double Brightness = 100, double Smoothing = 0, double SamplingDepth = 8,
     double Gamma = 1, double Saturation = 100,
     int CaptureRate = 75, int OutputRate = 3, string? DisplayDeviceName = null, double ColorTemperature = 6500,
-    bool DetectLetterbox = false, int SchemaVersion = 7,
+    bool DetectLetterbox = false, int SchemaVersion = 9,
     double CropLeftPercent = 0, double CropRightPercent = 0, double CropTopPercent = 0, double CropBottomPercent = 0,
     bool StartMinimizedToTray = false, bool LightingEnabled = false,
-    int ModeIndex = 0, double EffectSpeed = 50, string StaticColorHex = "FFFFFF", bool MinimizeToTrayOnClose = false)
+    int ModeIndex = 0, double EffectSpeed = 50, string StaticColorHex = "FFFFFF", bool MinimizeToTrayOnClose = false,
+    int HueCorrectionStart = 260, int HueCorrectionEnd = 290,
+    int HueCorrectionRedGain = 100, int HueCorrectionGreenGain = 100, int HueCorrectionBlueGain = 100,
+    int HueCorrection2Start = 0, int HueCorrection2End = 120,
+    int HueCorrection2RedGain = 100, int HueCorrection2GreenGain = 100, int HueCorrection2BlueGain = 100,
+    int HueCorrection3Start = 120, int HueCorrection3End = 240,
+    int HueCorrection3RedGain = 100, int HueCorrection3GreenGain = 100, int HueCorrection3BlueGain = 100)
 {
     internal void Validate()
     {
@@ -32,9 +38,17 @@ public sealed record AppSettings(
         if (ModeIndex is < 0 or > 5 || EffectSpeed is < 5 or > 100 || StaticColorHex is null ||
             StaticColorHex.Length != 6 || !StaticColorHex.All(Uri.IsHexDigit))
             throw new InvalidDataException("Mode, effect speed, or static RGB color is invalid.");
-        if (SchemaVersion is < 1 or > 7) throw new InvalidDataException("Settings schema version is unsupported.");
+        if (SchemaVersion is < 1 or > 9) throw new InvalidDataException("Settings schema version is unsupported.");
+        if (!ValidHueCorrection(HueCorrectionStart, HueCorrectionEnd, HueCorrectionRedGain, HueCorrectionGreenGain, HueCorrectionBlueGain) ||
+            !ValidHueCorrection(HueCorrection2Start, HueCorrection2End, HueCorrection2RedGain, HueCorrection2GreenGain, HueCorrection2BlueGain) ||
+            !ValidHueCorrection(HueCorrection3Start, HueCorrection3End, HueCorrection3RedGain, HueCorrection3GreenGain, HueCorrection3BlueGain))
+            throw new InvalidDataException("Hue correction range or channel gains are invalid.");
         if (DisplayDeviceName?.Length > 256) throw new InvalidDataException("Display device name is too long.");
     }
+
+    private static bool ValidHueCorrection(int start, int end, int red, int green, int blue) =>
+        start is >= 0 and <= 359 && end is >= 1 and <= 360 && start < end &&
+        red is >= 0 and <= 200 && green is >= 0 and <= 200 && blue is >= 0 and <= 200;
 
     public static bool TryParse(string json, out AppSettings settings, out string? error)
     {
@@ -98,6 +112,29 @@ public static class SettingsStore
                 if (sourceVersion < 5) settings = settings with { SchemaVersion = 5, StartMinimizedToTray = false };
                 if (sourceVersion < 6) settings = settings with { SchemaVersion = 6, LightingEnabled = false };
                 if (sourceVersion < 7) settings = settings with { SchemaVersion = 7, MinimizeToTrayOnClose = false };
+                if (sourceVersion < 8) settings = settings with
+                {
+                    SchemaVersion = 8,
+                    HueCorrectionStart = 260,
+                    HueCorrectionEnd = 290,
+                    HueCorrectionRedGain = 100,
+                    HueCorrectionGreenGain = 100,
+                    HueCorrectionBlueGain = 100
+                };
+                if (sourceVersion < 9) settings = settings with
+                {
+                    SchemaVersion = 9,
+                    HueCorrection2Start = 0,
+                    HueCorrection2End = 120,
+                    HueCorrection2RedGain = 100,
+                    HueCorrection2GreenGain = 100,
+                    HueCorrection2BlueGain = 100,
+                    HueCorrection3Start = 120,
+                    HueCorrection3End = 240,
+                    HueCorrection3RedGain = 100,
+                    HueCorrection3GreenGain = 100,
+                    HueCorrection3BlueGain = 100
+                };
                 return settings;
             }
             return new AppSettings();
@@ -112,7 +149,7 @@ public static class SettingsStore
         var directory = Path.GetDirectoryName(path) ?? throw new InvalidOperationException("Settings path has no directory.");
         Directory.CreateDirectory(directory);
         var temporary = path + ".tmp";
-        File.WriteAllText(temporary, (settings with { SchemaVersion = 7 }).ToJson());
+        File.WriteAllText(temporary, (settings with { SchemaVersion = 9 }).ToJson());
         File.Move(temporary, path, true);
     }
 }

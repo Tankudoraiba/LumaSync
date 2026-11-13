@@ -7,11 +7,14 @@ public static class BaseColorPresets
 {
     private static readonly BaseColorPreset[] presets =
     [
-        new("WHITE", "FFFFFF"),
-        new("MINT", "43F4E0"),
-        new("PINK", "FF36A2"),
-        new("AMBER", "FFB347"),
-        new("VIOLET", "7C4DFF")
+        new("RED", "FF0000"),
+        new("GREEN", "00FF00"),
+        new("BLUE", "0000FF"),
+        new("CYAN", "00FFFF"),
+        new("MAGENTA", "FF00FF"),
+        new("YELLOW", "FFFF00"),
+        new("VIOLET", "9B55D2"),
+        new("PINK", "FF69B4")
     ];
 
     public static IReadOnlyList<BaseColorPreset> All { get; } = Array.AsReadOnly(presets);
