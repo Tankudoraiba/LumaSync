@@ -63,12 +63,47 @@ public sealed class WindowsHidController : ILightingController
     {
         lock (writeLock)
         {
-            for (var offset = 0; offset < frame.Length; offset += 64)
+            KeyboardLockEventGate.WaitForQuietPeriod();
+            var lastLockEvent = KeyboardLockEventGate.LastLockKeyEvent;
+            while (true)
             {
-                Array.Clear(screenSyncReport);
-                frame.Slice(offset, Math.Min(64, frame.Length - offset)).CopyTo(screenSyncReport.AsSpan(1));
-                if (!handle.TryWriteOnce(screenSyncReport, 250, out var transferred) || transferred != screenSyncReport.Length)
-                    throw new IOException($"HID frame write failed or was short (Win32 {Marshal.GetLastWin32Error()}, {transferred}/{screenSyncReport.Length} bytes).");
+                var interrupted = false;
+                for (var offset = 0; offset < frame.Length; offset += 64)
+                {
+                    if (KeyboardLockEventGate.LastLockKeyEvent != lastLockEvent)
+                    {
+                        KeyboardLockEventGate.WaitForQuietPeriod();
+                        lastLockEvent = KeyboardLockEventGate.LastLockKeyEvent;
+                        interrupted = true;
+                        break;
+                    }
+
+                    KeyboardLockEventGate.WaitForQuietPeriod();
+                    var quietEvent = KeyboardLockEventGate.LastLockKeyEvent;
+                    if (quietEvent != lastLockEvent)
+                    {
+                        lastLockEvent = quietEvent;
+                        interrupted = true;
+                        break;
+                    }
+
+                    Array.Clear(screenSyncReport);
+                    frame.Slice(offset, Math.Min(64, frame.Length - offset)).CopyTo(screenSyncReport.AsSpan(1));
+                    if (!handle.TryWriteOnce(screenSyncReport, 250, out var transferred) || transferred != screenSyncReport.Length)
+                        throw new IOException($"HID frame write failed or was short (Win32 {Marshal.GetLastWin32Error()}, {transferred}/{screenSyncReport.Length} bytes).");
+
+                    var writeEvent = KeyboardLockEventGate.LastLockKeyEvent;
+                    if (writeEvent != lastLockEvent)
+                    {
+                        KeyboardLockEventGate.WaitForQuietPeriod();
+                        lastLockEvent = KeyboardLockEventGate.LastLockKeyEvent;
+                        interrupted = true;
+                        break;
+                    }
+                }
+                if (!interrupted && KeyboardLockEventGate.LastLockKeyEvent == lastLockEvent) return;
+                KeyboardLockEventGate.RecordInterruptedFrame();
+                lastLockEvent = KeyboardLockEventGate.LastLockKeyEvent;
             }
         }
     }

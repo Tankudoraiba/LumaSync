@@ -100,8 +100,9 @@ internal static class Program
     private static long captureRetryAt;
     private static readonly uint TaskbarCreatedMessage = RegisterWindowMessage("TaskbarCreated");
 
-    private static int Main()
+    private static int Main(string[] args)
     {
+        showDiagnostics = args.Contains("--debug", StringComparer.OrdinalIgnoreCase);
         instanceMutex = new Mutex(true, InstanceMutexName, out var firstInstance);
         if (!firstInstance)
         {
@@ -161,7 +162,8 @@ internal static class Program
         trayAvailable = AddTrayIcon(window);
         SetCaption(window, "LumaSync · Screen Sync");
         _ = SetTimer(window, DiagnosticsTimerId, 500, IntPtr.Zero);
-        var startHidden = settings.StartMinimizedToTray && trayAvailable;
+        _ = KeyboardLockEventGate.Install(instance);
+        var startHidden = settings.StartMinimizedToTray && trayAvailable && !showDiagnostics;
         ShowWindow(window, startHidden ? 0 : 5);
         if (!startHidden) UpdateWindow(window);
         SetCaption(window, "LumaSync · Screen Sync");
@@ -172,6 +174,7 @@ internal static class Program
             TranslateMessage(ref message);
             DispatchMessage(ref message);
         }
+        KeyboardLockEventGate.Uninstall();
         ReleaseSingleInstanceMutex();
         return (int)message.WParam;
     }
@@ -1701,14 +1704,16 @@ internal static class Program
                     var outputRate = OutputPacing.EffectiveRate(frameSettings.CaptureRate, frameSettings.OutputRate);
                     var outputCheckTimestamp = Stopwatch.GetTimestamp();
                     var freshScreenFrame = modeIndex == 0 && source.LastFrameWasUpdated;
-                    var outputCandidate = firstFrameForEnabledState || heartbeatDue || forcedUpdate || frameChanged || freshScreenFrame;
+                    var outputCandidate = previewColorPacked >= 0 || firstFrameForEnabledState || heartbeatDue || forcedUpdate || frameChanged || freshScreenFrame;
                     if (outputCandidate)
                     {
                         Interlocked.Increment(ref candidateFrames);
                         if (OutputPacing.IsDueForCapture(outputCheckTimestamp, previousOutputTimestamp, outputRate,
                                 frameSettings.CaptureRate, Stopwatch.Frequency))
                         {
-                            var isStaticOutput = modeIndex == 5;
+                            // Calibration previews use a solid color but must exercise the same SC
+                            // frame stream as Screen Sync and Music Sync, not the static-color command.
+                            var isStaticOutput = modeIndex == 5 && previewColorPacked < 0;
                             var outputSequence = NextSequence();
                             if (!isStaticOutput)
                                 ScreenSyncFrameBuilder.BuildInto(ledColors, outputSequence, screenSyncFrame);
@@ -1789,7 +1794,8 @@ internal static class Program
         var usbMs = Interlocked.Read(ref lastUsbWriteTicks) * 1000d / Stopwatch.Frequency;
         var latencyMs = Interlocked.Read(ref lastEndToEndTicks) * 1000d / Stopwatch.Frequency;
         var device = Interlocked.CompareExchange(ref controllerConnected, 0, 0) == 0 ? "HID WAIT" : "HID OK";
-        return $"CAP {captureFps:0.0} | CHG {changedFps:0.0} | C {candidateFps:0.0} | G {pacingRejectedFps:0.0} | Q {queuedFps:0.0} | OUT {outputFps:0.0} | P {processingMs:0.0} | USB {usbMs:0.0} | LAT {latencyMs:0.0} | D{Interlocked.Read(ref droppedCaptureFrames)} | {device}";
+        var gate = KeyboardLockEventGate.IsInstalled ? "LOCK HOOK ON" : "LOCK HOOK OFF";
+        return $"CAP {captureFps:0.0} | CHG {changedFps:0.0} | C {candidateFps:0.0} | G {pacingRejectedFps:0.0} | Q {queuedFps:0.0} | OUT {outputFps:0.0} | P {processingMs:0.0} | USB {usbMs:0.0} | LAT {latencyMs:0.0} | D{Interlocked.Read(ref droppedCaptureFrames)} | LK{KeyboardLockEventGate.LockKeyEventCount} R{KeyboardLockEventGate.InterruptedFrameCount} | {gate} | {device}";
     }
 
     private static void UpdateDiagnosticRates()
