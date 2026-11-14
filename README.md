@@ -9,6 +9,7 @@ The app uses a compact native Windows interface and processes display and audio 
 - Real-time screen-edge sampling with a separate color region for each LED.
 - LED layout, monitor selection, crop, sampling depth, brightness, smoothing, saturation, gamma, and color temperature controls.
 - Static color picker, built-in effects, and desktop-audio reactive lighting.
+- Adjust focused tuning, LED layout, effect speed, color channels, and hue correction values with the left and right arrow keys.
 - On/off control, saved settings, reset and import/export, notification-area controls, and optional startup with Windows.
 - Resizable interface that maintains its designed proportions and redraws on resize.
 - Local-only operation with no telemetry, account, advertisements, or automatic updater.

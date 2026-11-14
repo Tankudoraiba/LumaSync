@@ -27,13 +27,15 @@ public static class ScreenSyncSettingsEditor
         tuning = default;
         direction = 0;
         var row = y is >= 466 and <= 500 ? 0 : y is >= 504 and <= 538 ? 1 : y is >= 542 and <= 576 ? 2 : -1;
-        if (row < 0 || x < 32 || x > 870) return false;
-        var column = (x - 32) / 168;
-        var within = (x - 32) % 168;
+        if (row < 0) return false;
+        var rowStart = row == 0 ? 32 : 116;
+        if (x < rowStart || x >= rowStart + (row == 0 ? 5 : 4) * 168) return false;
+        var column = (x - rowStart) / 168;
+        var within = (x - rowStart) % 168;
         if (column > (row == 0 ? 4 : 3)) return false;
         if (within is >= 2 and <= 27) direction = -1;
         else if (within is >= 134 and <= 159) direction = 1;
-        else return false;
+        else if (within >= 162) return false;
         tuning = (ScreenSyncTuning)(row switch { 0 => column, 1 => column + 5, _ => column + 9 });
         return true;
     }

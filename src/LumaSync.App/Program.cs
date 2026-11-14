@@ -9,7 +9,8 @@ internal static class Program
     private const uint WindowMessageCreate = 0x0001, WindowMessageDestroy = 0x0002,
         WindowMessagePaint = 0x000F, WindowMessageEraseBackground = 0x0014,
         WindowMessageClose = 0x0010, WindowMessageGetMinMaxInfo = 0x0024,
-        WindowMessageTimer = 0x0113, WindowMessageLeftButtonUp = 0x0202;
+        WindowMessageTimer = 0x0113, WindowMessageLeftButtonUp = 0x0202,
+        WindowMessageKeyDown = 0x0100;
     private const uint WindowMessageTrayCallback = 0x8000 + 41, WindowMessageQueryEndSession = 0x0011,
         WindowMessageEndSession = 0x0016;
     private const uint PickerMessagePaint = 0x000F, PickerMessageEraseBackground = 0x0014,
@@ -19,6 +20,7 @@ internal static class Program
     private const int UiLogicalWidth = NativeUiWindowPolicy.LogicalWidth, UiLogicalHeight = NativeUiWindowPolicy.LogicalHeight;
     private const int PickerLogicalWidth = 700, PickerLogicalHeight = 640;
     private const uint PickerWindowStyle = 0x00C80000, PickerExtendedWindowStyle = 0x00000080;
+    private const uint DwmwaUseImmersiveDarkMode = 20, DwmwaUseImmersiveDarkModeLegacy = 19;
     private const int EmbeddedApplicationIconResourceId = 32512;
     private const uint LoadImageDefaultSize = 0x0040;
     private const uint NotifyIconAdd = 0, NotifyIconModify = 1, NotifyIconDelete = 2;
@@ -75,10 +77,15 @@ internal static class Program
     private static string pendingHexText = string.Empty;
     private static bool hexInputActive;
     private static int activeColorSlider = -1;
+    private static int focusedColorSlider = -1;
+    private static ScreenSyncTuning? focusedTuningSetting;
+    private static LedEdge? focusedLedEdge;
+    private static bool focusedEffectSpeed;
+    private static int focusedHueBand = -1, focusedHueParameter = -1;
     private static CancellationTokenSource? captureCancellation;
     private static Task? captureTask;
     private static IntPtr trayIconHandle;
-    private static IntPtr uiFont, brandTitleFont, brandSubtitleFont;
+    private static IntPtr uiFont, brandTitleFont, sectionFont, pickerTitleFont;
     private static bool trayAvailable;
     private static bool explicitExit;
     private static bool startWithWindows;
@@ -152,6 +159,7 @@ internal static class Program
             NativeUiWindowPolicy.ResizableWindowStyle, 120, 70, initialSize.Width, initialSize.Height,
             IntPtr.Zero, IntPtr.Zero, instance, IntPtr.Zero);
         if (window == IntPtr.Zero) { ReleaseSingleInstanceMutex(); return 4; }
+        ApplyDarkTitleBar(window);
         trayIconHandle = LoadImage(instance, new IntPtr(EmbeddedApplicationIconResourceId),
             1, 0, 0, LoadImageDefaultSize);
         if (trayIconHandle != IntPtr.Zero)
@@ -197,7 +205,25 @@ internal static class Program
                     }
                     SetCaption(hwnd, "LumaSync · Screen Sync");
                     return IntPtr.Zero;
+                case WindowMessageKeyDown:
+                {
+                    var key = wParam.ToUInt32();
+                    var direction = key == 0x25 ? -1 : key == 0x27 ? 1 : 0;
+                    if (direction == 0) break;
+                    if (focusedTuningSetting is ScreenSyncTuning focusedTuning)
+                        ApplyTuningChange(hwnd, focusedTuning, direction);
+                    else if (focusedLedEdge is LedEdge focusedEdge)
+                        ApplyLayoutChange(hwnd, focusedEdge, direction);
+                    else if (focusedEffectSpeed)
+                        AdjustEffectSpeed(hwnd, direction * 5);
+                    else break;
+                    InvalidateRect(hwnd, IntPtr.Zero, false);
+                    return IntPtr.Zero;
+                }
                 case WindowMessageLeftButtonUp:
+                    focusedTuningSetting = null;
+                    focusedLedEdge = null;
+                    focusedEffectSpeed = false;
                     var clientX = unchecked((short)((long)lParam & 0xFFFF));
                     var clientY = unchecked((short)(((long)lParam >> 16) & 0xFFFF));
                     if (!GetClientRect(hwnd, out var clientRect) || clientRect.Right <= 0 || clientRect.Bottom <= 0) break;
@@ -205,17 +231,17 @@ internal static class Program
                         clientRect.Right, clientRect.Bottom).ToLogical(clientX, clientY);
                     var clickX = click.X;
                     var clickY = click.Y;
-                    if (clickY is >= 30 and <= 75 && clickX is >= 660 and <= 755)
+                    if (clickY is >= 30 and <= 75 && clickX is >= 680 and <= 770)
                     {
                         ImportSettings(hwnd);
                         return IntPtr.Zero;
                     }
-                    if (clickY is >= 30 and <= 75 && clickX is >= 760 and <= 870)
+                    if (clickY is >= 30 and <= 75 && clickX is >= 780 and <= 870)
                     {
                         ExportSettings(hwnd);
                         return IntPtr.Zero;
                     }
-                    if (clickY is >= 30 and <= 75 && clickX is >= 565 and <= 650)
+                    if (clickY is >= 30 and <= 75 && clickX is >= 580 and <= 670)
                     {
                         showDiagnostics = !showDiagnostics;
                         InvalidateRect(hwnd, IntPtr.Zero, false);
@@ -237,7 +263,9 @@ internal static class Program
                     }
                     if (TryGetTuningEdit(clickX, clickY, out var tuning, out var tuningDelta))
                     {
-                        ApplyTuningChange(hwnd, tuning, tuningDelta);
+                        focusedTuningSetting = tuning;
+                        if (tuningDelta != 0) ApplyTuningChange(hwnd, tuning, tuningDelta);
+                        InvalidateRect(hwnd, IntPtr.Zero, false);
                         return IntPtr.Zero;
                     }
                     if (clickY is >= 666 and <= 704 && clickX is >= 32 and <= 300)
@@ -260,15 +288,22 @@ internal static class Program
                     if (clickY is >= 202 and <= 242)
                     {
                         if (clickX is >= 32 and <= 250) CycleNativeMode(hwnd);
-                        else if (clickX is >= 280 and <= 325) AdjustEffectSpeed(hwnd, -5);
-                        else if (clickX is >= 410 and <= 455) AdjustEffectSpeed(hwnd, 5);
+                        else if (clickX is >= 280 and <= 455)
+                        {
+                            focusedEffectSpeed = true;
+                            if (clickX <= 325) AdjustEffectSpeed(hwnd, -5);
+                            else if (clickX >= 410) AdjustEffectSpeed(hwnd, 5);
+                            InvalidateRect(hwnd, IntPtr.Zero, false);
+                        }
                         else if (clickX is >= 485 and < 755) OpenColorPicker(hwnd);
                         else if (clickX is >= 765 and <= 870) CycleBaseColor(hwnd);
                         return IntPtr.Zero;
                     }
                     if (TryGetEdgeEdit(clickX, clickY, out var edge, out var delta))
                     {
-                        ApplyLayoutChange(hwnd, edge, delta);
+                        focusedLedEdge = edge;
+                        if (delta != 0) ApplyLayoutChange(hwnd, edge, delta);
+                        InvalidateRect(hwnd, IntPtr.Zero, false);
                         return IntPtr.Zero;
                     }
                     if (clickX is >= 32 and <= 250 && clickY is >= 155 and <= 195)
@@ -523,6 +558,7 @@ internal static class Program
         pendingHexText = $"#{settings.StaticColorHex.ToUpperInvariant()}";
         hexInputActive = false;
         activeColorSlider = -1;
+        focusedColorSlider = focusedHueBand = focusedHueParameter = -1;
         colorPickerOwner = owner;
         var pickerSize = GetOuterWindowSize(PickerLogicalWidth, PickerLogicalHeight,
             PickerWindowStyle, PickerExtendedWindowStyle);
@@ -544,6 +580,7 @@ internal static class Program
             return;
         }
 
+        ApplyDarkTitleBar(colorPickerWindow);
         _ = EnableWindow(owner, false);
         _ = ShowWindow(colorPickerWindow, 5);
         _ = UpdateWindow(colorPickerWindow);
@@ -570,6 +607,7 @@ internal static class Program
                     hexInputActive = x is >= 150 and <= 660 && y is >= 76 and < 118;
                     if (hexInputActive)
                     {
+                        focusedColorSlider = focusedHueBand = focusedHueParameter = -1;
                         pendingHexText = "#";
                         activeColorSlider = -1;
                         _ = SetFocus(hwnd);
@@ -579,9 +617,15 @@ internal static class Program
                     var slider = ColorPickerSliderAt(x, y);
                     if (slider >= 0)
                     {
+                        focusedColorSlider = slider;
+                        focusedHueBand = focusedHueParameter = -1;
                         activeColorSlider = slider;
                         _ = SetCapture(hwnd);
                         UpdatePickerSliderFromX(x);
+                    }
+                    else
+                    {
+                        focusedColorSlider = -1;
                     }
                     return IntPtr.Zero;
                 }
@@ -593,8 +637,19 @@ internal static class Program
                     }
                     return IntPtr.Zero;
                 case PickerMessageKeyDown:
-                    if (wParam.ToUInt32() == 0x1B) { ClearCalibrationPreview(); DestroyWindow(hwnd); } // Escape cancels.
-                    else if (wParam.ToUInt32() == 0x0D) ApplyPickerColor(hwnd); // Enter applies.
+                    var key = wParam.ToUInt32();
+                    if (key == 0x1B) { ClearCalibrationPreview(); DestroyWindow(hwnd); } // Escape cancels.
+                    else if (key == 0x0D) ApplyPickerColor(hwnd); // Enter applies.
+                    else if (!hexInputActive && (key == 0x25 || key == 0x27))
+                    {
+                        var direction = key == 0x25 ? -1 : 1;
+                        if (focusedHueBand >= 0 && focusedHueParameter >= 0)
+                            AdjustHueCorrection(colorPickerOwner, focusedHueBand, focusedHueParameter, direction);
+                        else if (focusedColorSlider >= 0)
+                            AdjustPickerColorChannel(focusedColorSlider, direction);
+                        else return IntPtr.Zero;
+                        InvalidateRect(hwnd, IntPtr.Zero, false);
+                    }
                     return IntPtr.Zero;
                 case PickerMessageChar:
                     if (hexInputActive)
@@ -631,11 +686,18 @@ internal static class Program
                     }
 
                     var (x, y) = ColorPickerClientPoint(hwnd, lParam);
+                    focusedHueBand = focusedHueParameter = -1;
+                    if (y is >= 21 and < 53 && x is >= 634 and < 666)
+                    {
+                        ClearCalibrationPreview();
+                        DestroyWindow(hwnd);
+                        return IntPtr.Zero;
+                    }
                     for (var i = 0; i < BaseColorPresets.All.Count; i++)
                     {
-                        var left = 40 + i % 4 * 155;
-                        var top = 132 + i / 4 * 48;
-                        if (x < left || x >= left + 145 || y < top || y >= top + 42) continue;
+                        var left = 45 + i % 4 * 155;
+                        var top = 154 + i / 4 * 44;
+                        if (x < left || x >= left + 145 || y < top || y >= top + 40) continue;
                         var preset = BaseColorPresets.All[i];
                         pendingPickerColor = ParseStaticColor(preset.Hex);
                         pendingHexText = $"#{preset.Hex.ToUpperInvariant()}";
@@ -648,24 +710,27 @@ internal static class Program
                         return IntPtr.Zero;
                     }
 
-                    if (y is >= 566 and < 616 && x is >= 40 and < 185)
+                    if (y is >= 580 and < 630 && x is >= 45 and < 235)
                     {
                         ApplyPickerColor(hwnd);
                         return IntPtr.Zero;
                     }
-                    if (y is >= 440 and < 548 && x is >= 40 and < 660)
+                    if (y is >= 430 and < 574 && x is >= 40 and < 660)
                     {
-                        var band = (y - 440) / 38;
-                        if ((y - 440) % 38 >= 32) return IntPtr.Zero;
+                        var band = (y - 430) / 48;
+                        var rowOffset = (y - 430) % 48;
+                        if (band >= 3 || rowOffset < 15 || rowOffset >= 44) return IntPtr.Zero;
                         var column = Math.Clamp((x - 40) / 124, 0, 4);
                         var localX = (x - 40) % 124;
-                        if (localX < 26) AdjustHueCorrection(colorPickerOwner, band, column, -1);
-                        else if (localX >= 98) AdjustHueCorrection(colorPickerOwner, band, column, 1);
-                        else return IntPtr.Zero;
+                        focusedColorSlider = -1;
+                        focusedHueBand = band;
+                        focusedHueParameter = column;
+                        if (localX is >= 10 and < 34) AdjustHueCorrection(colorPickerOwner, band, column, -1);
+                        else if (localX is >= 90 and < 114) AdjustHueCorrection(colorPickerOwner, band, column, 1);
                         InvalidateRect(hwnd, IntPtr.Zero, false);
                         return IntPtr.Zero;
                     }
-                    if (y is >= 566 and < 616 && x is >= 195 and < 340)
+                    if (y is >= 580 and < 630 && x is >= 255 and < 445)
                     {
                         var updated = settings with
                         {
@@ -684,19 +749,13 @@ internal static class Program
                         InvalidateRect(hwnd, IntPtr.Zero, false);
                         return IntPtr.Zero;
                     }
-                    if (y is >= 566 and < 616 && x is >= 350 and < 495)
+                    if (y is >= 580 and < 630 && x is >= 465 and < 655)
                     {
                         ClearCalibrationPreview();
                         pendingPickerColor = ParseStaticColor(settings.StaticColorHex);
                         pendingHexText = $"#{settings.StaticColorHex.ToUpperInvariant()}";
                         hexInputActive = false;
                         InvalidateRect(hwnd, IntPtr.Zero, false);
-                        return IntPtr.Zero;
-                    }
-                    if (y is >= 566 and < 616 && x is >= 505 and < 660)
-                    {
-                        ClearCalibrationPreview();
-                        DestroyWindow(hwnd);
                         return IntPtr.Zero;
                     }
                     return IntPtr.Zero;
@@ -756,6 +815,25 @@ internal static class Program
             0 => pendingPickerColor with { R = value },
             1 => pendingPickerColor with { G = value },
             _ => pendingPickerColor with { B = value }
+        };
+        pendingHexText = $"#{pendingPickerColor.R:X2}{pendingPickerColor.G:X2}{pendingPickerColor.B:X2}";
+        if (colorPickerWindow != IntPtr.Zero) InvalidateRect(colorPickerWindow, IntPtr.Zero, false);
+    }
+
+    private static void AdjustPickerColorChannel(int channel, int direction)
+    {
+        var value = channel switch
+        {
+            0 => pendingPickerColor.R,
+            1 => pendingPickerColor.G,
+            _ => pendingPickerColor.B
+        };
+        var adjusted = (byte)Math.Clamp(value + direction, 0, 255);
+        pendingPickerColor = channel switch
+        {
+            0 => pendingPickerColor with { R = adjusted },
+            1 => pendingPickerColor with { G = adjusted },
+            _ => pendingPickerColor with { B = adjusted }
         };
         pendingHexText = $"#{pendingPickerColor.R:X2}{pendingPickerColor.G:X2}{pendingPickerColor.B:X2}";
         if (colorPickerWindow != IntPtr.Zero) InvalidateRect(colorPickerWindow, IntPtr.Zero, false);
@@ -893,14 +971,19 @@ internal static class Program
             FillRect(hdc, ref background, backgroundBrush);
             DeleteObject(backgroundBrush);
             SetBkMode(hdc, TextTransparent);
+            if (uiFont == IntPtr.Zero)
+                uiFont = CreateFontW(-12, 0, 0, 0, 500, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe UI");
             if (uiFont != IntPtr.Zero) originalFont = SelectObject(hdc, uiFont);
 
             var header = new Rect { Left = 24, Top = 16, Right = 676, Bottom = 60 };
-            var headerBrush = CreateSolidBrush(PalettePanel);
-            FillRect(hdc, ref header, headerBrush);
-            DeleteObject(headerBrush);
+            FillRoundedRect(hdc, header, PalettePanel, 8);
             SetTextColor(hdc, PaletteAccentTeal);
+            if (pickerTitleFont == IntPtr.Zero)
+                pickerTitleFont = CreateFontW(-16, 0, 0, 0, 700, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe UI Semibold");
+            var previousTitleFont = pickerTitleFont != IntPtr.Zero ? SelectObject(hdc, pickerTitleFont) : IntPtr.Zero;
             DrawText(hdc, "CUSTOM COLOR PICKER", -1, ref header, TextButtonCentered);
+            if (previousTitleFont != IntPtr.Zero && previousTitleFont != new IntPtr(-1)) _ = SelectObject(hdc, previousTitleFont);
+            DrawColorPickerButton(hdc, new Rect { Left = 634, Top = 21, Right = 666, Bottom = 53 }, "×", PaletteButton);
 
             var preview = new Rect { Left = 40, Top = 76, Right = 132, Bottom = 118 };
             var previewBrush = CreateSolidBrush(ColorRef(pendingPickerColor));
@@ -908,9 +991,7 @@ internal static class Program
             DeleteObject(previewBrush);
             SetTextColor(hdc, PaletteText);
             var hexField = new Rect { Left = 150, Top = 76, Right = 660, Bottom = 118 };
-            var hexBrush = CreateSolidBrush(hexInputActive ? PaletteButton : PalettePanel);
-            FillRect(hdc, ref hexField, hexBrush);
-            DeleteObject(hexBrush);
+            FillRoundedRect(hdc, hexField, hexInputActive ? PaletteButton : PalettePanel, 8);
             SetTextColor(hdc, PaletteText);
             DrawText(hdc, hexInputActive ? $"HEX  {pendingHexText}|   ·   type 6 hex digits" : $"HEX  {pendingHexText}   ·   click to enter a hex color",
                 -1, ref hexField, TextButtonCentered);
@@ -918,58 +999,64 @@ internal static class Program
             for (var i = 0; i < BaseColorPresets.All.Count; i++)
             {
                 var preset = BaseColorPresets.All[i];
-                var left = 40 + i % 4 * 155;
-                var top = 132 + i / 4 * 48;
-                var swatchButton = new Rect { Left = left, Top = top, Right = left + 145, Bottom = top + 42 };
-                var presetBrush = CreateSolidBrush(PaletteButton);
-                FillRect(hdc, ref swatchButton, presetBrush);
-                DeleteObject(presetBrush);
+                var left = 45 + i % 4 * 155;
+                var top = 154 + i / 4 * 44;
+                var swatchButton = new Rect { Left = left, Top = top, Right = left + 145, Bottom = top + 40 };
+                FillRoundedRect(hdc, swatchButton, PaletteButton, 7);
                 var presetColor = ParseStaticColor(preset.Hex);
                 var presetSwatch = new Rect { Left = left + 7, Top = top + 10, Right = left + 28, Bottom = top + 31 };
                 var presetColorBrush = CreateSolidBrush(ColorRef(presetColor));
                 FillRect(hdc, ref presetSwatch, presetColorBrush);
                 DeleteObject(presetColorBrush);
                 SetTextColor(hdc, PaletteText);
-                var presetName = new Rect { Left = left + 32, Top = top, Right = left + 141, Bottom = top + 42 };
+                var presetName = new Rect { Left = left + 32, Top = top, Right = left + 141, Bottom = top + 40 };
                 DrawText(hdc, preset.Name, -1, ref presetName, TextButtonCentered);
             }
 
             SetTextColor(hdc, PaletteAccentTeal);
-            var presetHeading = new Rect { Left = 40, Top = 116, Right = 660, Bottom = 132 };
-            DrawText(hdc, "CALIBRATION COLORS  ·  CLICK TO PREVIEW ON LEDS", -1, ref presetHeading, TextButtonCentered);
+            var presetHeading = new Rect { Left = 40, Top = 120, Right = 660, Bottom = 140 };
+            DrawSectionText(hdc, "CALIBRATION COLORS  ·  CLICK TO PREVIEW ON LEDS", ref presetHeading, TextButtonCentered);
 
             DrawColorChannelSlider(hdc, 0, "RED", pendingPickerColor.R, 240);
             DrawColorChannelSlider(hdc, 1, "GREEN", pendingPickerColor.G, 304);
             DrawColorChannelSlider(hdc, 2, "BLUE", pendingPickerColor.B, 368);
             SetTextColor(hdc, PaletteAccentTeal);
             var correction = settings;
-            var gainHeading = new Rect { Left = 40, Top = 410, Right = 660, Bottom = 438 };
-            DrawText(hdc, "SAVED HUE CORRECTIONS  ·  THREE INDEPENDENT BANDS  ·  PER-BAND RGB GAINS", -1, ref gainHeading, TextButtonCentered);
+            var gainHeading = new Rect { Left = 40, Top = 408, Right = 660, Bottom = 428 };
+            DrawSectionText(hdc, "HUE CORRECTIONS  ·  CLICK A VALUE, USE ← / →", ref gainHeading, TextButtonCentered);
             var correctionValues = new[]
             {
-                new[] { $"H1 LO {correction.HueCorrectionStart}°", $"H1 HI {correction.HueCorrectionEnd}°", $"R {correction.HueCorrectionRedGain}%", $"G {correction.HueCorrectionGreenGain}%", $"B {correction.HueCorrectionBlueGain}%" },
-                new[] { $"H2 LO {correction.HueCorrection2Start}°", $"H2 HI {correction.HueCorrection2End}°", $"R {correction.HueCorrection2RedGain}%", $"G {correction.HueCorrection2GreenGain}%", $"B {correction.HueCorrection2BlueGain}%" },
-                new[] { $"H3 LO {correction.HueCorrection3Start}°", $"H3 HI {correction.HueCorrection3End}°", $"R {correction.HueCorrection3RedGain}%", $"G {correction.HueCorrection3GreenGain}%", $"B {correction.HueCorrection3BlueGain}%" }
+                new[] { $"{correction.HueCorrectionStart}°", $"{correction.HueCorrectionEnd}°", $"{correction.HueCorrectionRedGain}%", $"{correction.HueCorrectionGreenGain}%", $"{correction.HueCorrectionBlueGain}%" },
+                new[] { $"{correction.HueCorrection2Start}°", $"{correction.HueCorrection2End}°", $"{correction.HueCorrection2RedGain}%", $"{correction.HueCorrection2GreenGain}%", $"{correction.HueCorrection2BlueGain}%" },
+                new[] { $"{correction.HueCorrection3Start}°", $"{correction.HueCorrection3End}°", $"{correction.HueCorrection3RedGain}%", $"{correction.HueCorrection3GreenGain}%", $"{correction.HueCorrection3BlueGain}%" }
             };
+            var bandNames = new[] { "HUE BAND 1", "HUE BAND 2", "HUE BAND 3" };
+            var parameterNames = new[] { "HUE START", "HUE END", "RED GAIN", "GREEN GAIN", "BLUE GAIN" };
             for (var band = 0; band < correctionValues.Length; band++)
             {
-                var rowY = 440 + band * 38;
+                var rowY = 430 + band * 48;
+                SetTextColor(hdc, focusedHueBand == band ? PaletteAccentPink : PaletteAccentTeal);
+                var bandLabel = new Rect { Left = 40, Top = rowY, Right = 660, Bottom = rowY + 15 };
+                DrawSectionText(hdc, bandNames[band], ref bandLabel, 0x00000000);
                 for (var parameter = 0; parameter < correctionValues[band].Length; parameter++)
                 {
                     var x = 40 + parameter * 124;
-                    var minus = new Rect { Left = x, Top = rowY, Right = x + 24, Bottom = rowY + 32 };
-                    var value = new Rect { Left = x + 25, Top = rowY, Right = x + 99, Bottom = rowY + 32 };
-                    var plus = new Rect { Left = x + 100, Top = rowY, Right = x + 124, Bottom = rowY + 32 };
+                    var isFocused = focusedHueBand == band && focusedHueParameter == parameter;
+                    SetTextColor(hdc, isFocused ? PaletteAccentPink : PaletteMuted);
+                    var label = new Rect { Left = x, Top = rowY + 15, Right = x + 124, Bottom = rowY + 29 };
+                    DrawText(hdc, parameterNames[parameter], -1, ref label, TextButtonCentered);
+                    var minus = new Rect { Left = x + 10, Top = rowY + 29, Right = x + 34, Bottom = rowY + 45 };
+                    var value = new Rect { Left = x + 35, Top = rowY + 29, Right = x + 89, Bottom = rowY + 45 };
+                    var plus = new Rect { Left = x + 90, Top = rowY + 29, Right = x + 114, Bottom = rowY + 45 };
                     DrawColorPickerButton(hdc, minus, "−", PaletteButton);
                     DrawColorPickerButton(hdc, plus, "+", PaletteButton);
-                    SetTextColor(hdc, PaletteSecondary);
+                    SetTextColor(hdc, isFocused ? PaletteAccentPink : PaletteSecondary);
                     DrawText(hdc, correctionValues[band][parameter], -1, ref value, TextButtonCentered);
                 }
             }
-            DrawColorPickerButton(hdc, new Rect { Left = 40, Top = 566, Right = 185, Bottom = 616 }, "SAVE COLOR", PaletteActive);
-            DrawColorPickerButton(hdc, new Rect { Left = 195, Top = 566, Right = 340, Bottom = 616 }, "NEUTRAL RGB", PaletteButton);
-            DrawColorPickerButton(hdc, new Rect { Left = 350, Top = 566, Right = 495, Bottom = 616 }, "STOP PREVIEW", PaletteButton);
-            DrawColorPickerButton(hdc, new Rect { Left = 505, Top = 566, Right = 660, Bottom = 616 }, "CLOSE", PaletteButton);
+            DrawColorPickerButton(hdc, new Rect { Left = 45, Top = 580, Right = 235, Bottom = 630 }, "SAVE COLOR", PaletteActive);
+            DrawColorPickerButton(hdc, new Rect { Left = 255, Top = 580, Right = 445, Bottom = 630 }, "RESET GAINS · 100%", PaletteButton);
+            DrawColorPickerButton(hdc, new Rect { Left = 465, Top = 580, Right = 655, Bottom = 630 }, "STOP PREVIEW", PaletteButton);
             if (usePickerBuffer)
             {
                 _ = SetMapMode(pickerBufferDc, 1);
@@ -985,7 +1072,7 @@ internal static class Program
 
     private static void DrawColorChannelSlider(IntPtr hdc, int channel, string label, byte selectedValue, int y)
     {
-        SetTextColor(hdc, PaletteSecondary);
+        SetTextColor(hdc, focusedColorSlider == channel ? PaletteAccentPink : PaletteSecondary);
         var name = new Rect { Left = 40, Top = y, Right = 138, Bottom = y + 40 };
         DrawText(hdc, label, -1, ref name, TextButtonCentered);
         var track = new Rect { Left = 160, Top = y + 10, Right = 552, Bottom = y + 30 };
@@ -1022,11 +1109,32 @@ internal static class Program
 
     private static void DrawColorPickerButton(IntPtr hdc, Rect rect, string label, uint fillColor)
     {
-        var brush = CreateSolidBrush(fillColor);
-        FillRect(hdc, ref rect, brush);
-        DeleteObject(brush);
+        FillRoundedRect(hdc, rect, fillColor, 8);
         SetTextColor(hdc, PaletteText);
         DrawText(hdc, label, -1, ref rect, TextButtonCentered);
+    }
+
+    private static void DrawSectionText(IntPtr hdc, string text, ref Rect rect, uint format)
+    {
+        if (sectionFont == IntPtr.Zero)
+            sectionFont = CreateFontW(-12, 0, 0, 0, 600, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe UI Semibold");
+        var previousFont = sectionFont != IntPtr.Zero ? SelectObject(hdc, sectionFont) : IntPtr.Zero;
+        DrawText(hdc, text, -1, ref rect, format);
+        if (previousFont != IntPtr.Zero && previousFont != new IntPtr(-1)) _ = SelectObject(hdc, previousFont);
+    }
+
+    private static void FillRoundedRect(IntPtr hdc, Rect rect, uint color, int corner = 10)
+    {
+        var region = CreateRoundRectRgn(rect.Left, rect.Top, rect.Right, rect.Bottom, corner, corner);
+        var brush = CreateSolidBrush(color);
+        if (brush == IntPtr.Zero) { if (region != IntPtr.Zero) DeleteObject(region); return; }
+        if (region == IntPtr.Zero) FillRect(hdc, ref rect, brush);
+        else
+        {
+            _ = FillRgn(hdc, region, brush);
+            DeleteObject(region);
+        }
+        DeleteObject(brush);
     }
 
     private static uint ColorRef(ColorRgb color) => (uint)(color.R | color.G << 8 | color.B << 16);
@@ -1443,8 +1551,11 @@ internal static class Program
         for (var i = 0; i < 4; i++)
         {
             var left = 80 + i * 190;
-            if (x >= left && x < left + 34) { edge = (LedEdge)i; delta = -1; return true; }
-            if (x >= left + 136 && x < left + 170) { edge = (LedEdge)i; delta = 1; return true; }
+            if (x < left || x >= left + 170) continue;
+            edge = (LedEdge)i;
+            if (x < left + 34) delta = -1;
+            else if (x >= left + 136) delta = 1;
+            return true;
         }
         return false;
     }
@@ -1785,17 +1896,12 @@ internal static class Program
     private static string BuildDiagnosticsText()
     {
         var captureFps = Interlocked.Read(ref recentCaptureMilliFps) / 1000d;
-        var changedFps = Interlocked.Read(ref recentChangedMilliFps) / 1000d;
-        var queuedFps = Interlocked.Read(ref recentQueuedMilliFps) / 1000d;
         var outputFps = Interlocked.Read(ref recentOutputMilliFps) / 1000d;
-        var candidateFps = Interlocked.Read(ref recentCandidateMilliFps) / 1000d;
-        var pacingRejectedFps = Interlocked.Read(ref recentPacingRejectedMilliFps) / 1000d;
-        var processingMs = Interlocked.Read(ref lastProcessingTicks) * 1000d / Stopwatch.Frequency;
         var usbMs = Interlocked.Read(ref lastUsbWriteTicks) * 1000d / Stopwatch.Frequency;
         var latencyMs = Interlocked.Read(ref lastEndToEndTicks) * 1000d / Stopwatch.Frequency;
         var device = Interlocked.CompareExchange(ref controllerConnected, 0, 0) == 0 ? "HID WAIT" : "HID OK";
-        var gate = KeyboardLockEventGate.IsInstalled ? "LOCK HOOK ON" : "LOCK HOOK OFF";
-        return $"CAP {captureFps:0.0} | CHG {changedFps:0.0} | C {candidateFps:0.0} | G {pacingRejectedFps:0.0} | Q {queuedFps:0.0} | OUT {outputFps:0.0} | P {processingMs:0.0} | USB {usbMs:0.0} | LAT {latencyMs:0.0} | D{Interlocked.Read(ref droppedCaptureFrames)} | LK{KeyboardLockEventGate.LockKeyEventCount} R{KeyboardLockEventGate.InterruptedFrameCount} | {gate} | {device}";
+        var gate = KeyboardLockEventGate.IsInstalled ? "HOOK ON" : "HOOK OFF";
+        return $"CAP {captureFps:0.0} | OUT {outputFps:0.0} | USB {usbMs:0.0} ms | LAT {latencyMs:0.0} ms | DROP {Interlocked.Read(ref droppedCaptureFrames)} | LOCK {KeyboardLockEventGate.LockKeyEventCount}/{KeyboardLockEventGate.InterruptedFrameCount} | {gate} | {device}";
     }
 
     private static void UpdateDiagnosticRates()
@@ -1879,14 +1985,12 @@ internal static class Program
             SetBkMode(hdc, TextTransparent);
             SetTextColor(hdc, PaletteText);
             DrawBranding(hdc);
-            DrawHeaderAction(hdc, new Rect { Left = 565, Top = 30, Right = 650, Bottom = 75 },
+            DrawHeaderAction(hdc, new Rect { Left = 580, Top = 30, Right = 670, Bottom = 75 },
                 showDiagnostics ? "HIDE FPS" : "SHOW FPS");
-            DrawHeaderAction(hdc, new Rect { Left = 660, Top = 30, Right = 755, Bottom = 75 }, "IMPORT");
-            DrawHeaderAction(hdc, new Rect { Left = 760, Top = 30, Right = 870, Bottom = 75 }, "EXPORT");
+            DrawHeaderAction(hdc, new Rect { Left = 680, Top = 30, Right = 770, Bottom = 75 }, "IMPORT");
+            DrawHeaderAction(hdc, new Rect { Left = 780, Top = 30, Right = 870, Bottom = 75 }, "EXPORT");
             var toggle = new Rect { Left = 32, Top = 95, Right = 250, Bottom = 145 };
-            var toggleBrush = CreateSolidBrush(lightingEnabled ? PaletteOn : PaletteButton);
-            FillRect(hdc, ref toggle, toggleBrush);
-            DeleteObject(toggleBrush);
+            FillRoundedRect(hdc, toggle, lightingEnabled ? PaletteOn : PaletteButton, 10);
             SetTextColor(hdc, PaletteText);
             DrawText(hdc, lightingEnabled ? "LIGHTING  ON" : "LIGHTING  OFF", -1, ref toggle, TextButtonCentered);
             SetTextColor(hdc, PaletteSecondary);
@@ -1988,25 +2092,21 @@ internal static class Program
 
         if (brandTitleFont == IntPtr.Zero)
             brandTitleFont = CreateFontW(-26, 0, 0, 0, 700, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe UI Semibold");
-        if (brandSubtitleFont == IntPtr.Zero)
-            brandSubtitleFont = CreateFontW(-11, 0, 0, 0, 500, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe UI");
-
         var oldFont = SelectObject(hdc, brandTitleFont);
         SetTextColor(hdc, PaletteAccentTeal);
         var title = new Rect { Left = 92, Top = 16, Right = 510, Bottom = 50 };
         DrawText(hdc, "LUMASYNC", -1, ref title, 0x00000020 | 0x00000004);
-        _ = SelectObject(hdc, brandSubtitleFont);
-        SetTextColor(hdc, PaletteSecondary);
-        var subtitle = new Rect { Left = 95, Top = 49, Right = 530, Bottom = 70 };
-        DrawText(hdc, "MIKU AMBIENT  ·  SCREEN SYNC", -1, ref subtitle, 0x00000020 | 0x00000004);
+        _ = GetTextExtentPoint32W(hdc, "LUMASYNC", 8, out var titleSize);
         _ = SelectObject(hdc, oldFont);
 
+        var stripeWidth = Math.Max(titleSize.Width, 1);
+        var pinkWidth = Math.Max(stripeWidth / 5, 1);
         var accent = CreateSolidBrush(PaletteAccentPink);
-        var accentMark = new Rect { Left = 94, Top = 75, Right = 132, Bottom = 78 };
+        var accentMark = new Rect { Left = 92, Top = 60, Right = 92 + pinkWidth, Bottom = 63 };
         FillRect(hdc, ref accentMark, accent);
         DeleteObject(accent);
         var accentLineBrush = CreateSolidBrush(PaletteAccentTeal);
-        var accentLine = new Rect { Left = 132, Top = 76, Right = 520, Bottom = 78 };
+        var accentLine = new Rect { Left = 92 + pinkWidth, Top = 60, Right = 92 + stripeWidth, Bottom = 63 };
         FillRect(hdc, ref accentLine, accentLineBrush);
         DeleteObject(accentLineBrush);
     }
@@ -2014,25 +2114,37 @@ internal static class Program
     private static void DisposeBrandFonts()
     {
         if (brandTitleFont != IntPtr.Zero) DeleteObject(brandTitleFont);
-        if (brandSubtitleFont != IntPtr.Zero) DeleteObject(brandSubtitleFont);
         brandTitleFont = IntPtr.Zero;
-        brandSubtitleFont = IntPtr.Zero;
     }
 
     private static void DisposeUiFont()
     {
         if (uiFont != IntPtr.Zero) DeleteObject(uiFont);
+        if (sectionFont != IntPtr.Zero) DeleteObject(sectionFont);
+        if (pickerTitleFont != IntPtr.Zero) DeleteObject(pickerTitleFont);
         uiFont = IntPtr.Zero;
+        sectionFont = IntPtr.Zero;
+        pickerTitleFont = IntPtr.Zero;
     }
 
     private static void DrawLedPreview(IntPtr hdc)
     {
         // Keep the preview's top LEDs below the mode controls and its bottom LEDs
         // clear of the tuning panel. The former taller preview let both rows touch.
-        var monitor = new Rect { Left = 190, Top = 270, Right = 730, Bottom = 390 };
+        var monitor = new Rect { Left = 190, Top = 284, Right = 730, Bottom = 404 };
         var screen = CreateSolidBrush(0x00180F0A);
         FillRect(hdc, ref monitor, screen);
         DeleteObject(screen);
+        var frame = CreateSolidBrush(PalettePanel);
+        var frameTop = new Rect { Left = monitor.Left, Top = monitor.Top, Right = monitor.Right, Bottom = monitor.Top + 2 };
+        var frameBottom = new Rect { Left = monitor.Left, Top = monitor.Bottom - 2, Right = monitor.Right, Bottom = monitor.Bottom };
+        var frameLeft = new Rect { Left = monitor.Left, Top = monitor.Top + 2, Right = monitor.Left + 2, Bottom = monitor.Bottom - 2 };
+        var frameRight = new Rect { Left = monitor.Right - 2, Top = monitor.Top + 2, Right = monitor.Right, Bottom = monitor.Bottom - 2 };
+        FillRect(hdc, ref frameTop, frame);
+        FillRect(hdc, ref frameBottom, frame);
+        FillRect(hdc, ref frameLeft, frame);
+        FillRect(hdc, ref frameRight, frame);
+        DeleteObject(frame);
         var ledBrush = GetStockObject(18); // DC_BRUSH avoids per-frame GDI handle churn.
         for (var i = 0; i < ledLayout.Length; i++)
         {
@@ -2061,23 +2173,21 @@ internal static class Program
     private static void DrawModeControls(IntPtr hdc)
     {
         var mode = new Rect { Left = 32, Top = 202, Right = 250, Bottom = 242 };
-        var modeBrush = CreateSolidBrush(settings.ModeIndex == 0 ? PaletteActive : PaletteButtonAlt);
-        FillRect(hdc, ref mode, modeBrush);
-        DeleteObject(modeBrush);
+        FillRoundedRect(hdc, mode, settings.ModeIndex == 0 ? PaletteActive : PaletteButtonAlt, 8);
         SetTextColor(hdc, PaletteText);
         DrawText(hdc, $"MODE  ·  {NativeModeName(settings.ModeIndex).ToUpperInvariant()}", -1, ref mode, TextButtonCentered);
 
         var minus = new Rect { Left = 280, Top = 202, Right = 325, Bottom = 242 };
         var plus = new Rect { Left = 410, Top = 202, Right = 455, Bottom = 242 };
-        var speedBrush = CreateSolidBrush(PaletteButton);
-        FillRect(hdc, ref minus, speedBrush);
-        FillRect(hdc, ref plus, speedBrush);
-        DeleteObject(speedBrush);
+        FillRoundedRect(hdc, minus, PaletteButton, 8);
+        FillRoundedRect(hdc, plus, PaletteButton, 8);
         DrawText(hdc, "−", -1, ref minus, TextButtonCentered);
         DrawText(hdc, "+", -1, ref plus, TextButtonCentered);
         SetTextColor(hdc, PaletteSecondary);
         var speedLabel = new Rect { Left = 330, Top = 202, Right = 405, Bottom = 242 };
         var rateLabel = settings.ModeIndex == 4 ? $"GAIN {settings.EffectSpeed:0}" : $"SPEED {settings.EffectSpeed:0}";
+        if (focusedEffectSpeed) SetTextColor(hdc, PaletteAccentPink);
+        else SetTextColor(hdc, PaletteSecondary);
         DrawText(hdc, rateLabel, -1, ref speedLabel, TextButtonCentered);
 
         var color = ParseStaticColor(settings.StaticColorHex);
@@ -2096,9 +2206,7 @@ internal static class Program
     private static void DrawDisplaySelector(IntPtr hdc)
     {
         var selector = new Rect { Left = 32, Top = 155, Right = 250, Bottom = 195 };
-        var selectorBrush = CreateSolidBrush(PaletteButton);
-        FillRect(hdc, ref selector, selectorBrush);
-        DeleteObject(selectorBrush);
+        FillRoundedRect(hdc, selector, PaletteButton, 8);
         SetTextColor(hdc, PaletteText);
         var savedDisplayIndex = Array.FindIndex(availableDisplays,
             d => string.Equals(d.DeviceName, displayName, StringComparison.OrdinalIgnoreCase));
@@ -2110,15 +2218,11 @@ internal static class Program
         var label = new Rect { Left = 255, Top = 155, Right = 465, Bottom = 195 };
         DrawText(hdc, $"{selectedDisplay.DeviceName} · {selectedDisplay.Bounds.Width}×{selectedDisplay.Bounds.Height}", -1, ref label, TextButtonCentered);
         var direction = new Rect { Left = 470, Top = 155, Right = 650, Bottom = 195 };
-        var mappingBrush = CreateSolidBrush(PaletteButton);
-        FillRect(hdc, ref direction, mappingBrush);
-        DeleteObject(mappingBrush);
+        FillRoundedRect(hdc, direction, PaletteButton, 8);
         SetTextColor(hdc, PaletteText);
         DrawText(hdc, settings.Clockwise ? "DIRECTION  ·  CW" : "DIRECTION  ·  CCW", -1, ref direction, TextButtonCentered);
         var corner = new Rect { Left = 660, Top = 155, Right = 870, Bottom = 195 };
-        var cornerBrush = CreateSolidBrush(PaletteButton);
-        FillRect(hdc, ref corner, cornerBrush);
-        DeleteObject(cornerBrush);
+        FillRoundedRect(hdc, corner, PaletteButton, 8);
         var cornerName = settings.StartCorner.ToString().Replace("Top", "TOP-").Replace("Bottom", "BOTTOM-").Replace("Left", "LEFT").Replace("Right", "RIGHT");
         DrawText(hdc, $"START  ·  {cornerName}", -1, ref corner, TextButtonCentered);
     }
@@ -2127,17 +2231,15 @@ internal static class Program
     {
         SetTextColor(hdc, PaletteAccentTeal);
         var heading = new Rect { Left = 80, Top = 581, Right = 820, Bottom = 603 };
-        DrawText(hdc, "LED LAYOUT  ·  USE − / + TO ADJUST EDGE COUNTS", -1, ref heading, 0x00000000);
+        DrawSectionText(hdc, "LED LAYOUT  ·  CLICK A VALUE, USE ← / →", ref heading, 0x00000000);
         for (var i = 0; i < 4; i++)
         {
             var edge = (LedEdge)i;
             var left = 80 + i * 190;
             var minus = new Rect { Left = left, Top = 606, Right = left + 34, Bottom = 634 };
             var plus = new Rect { Left = left + 136, Top = 606, Right = left + 170, Bottom = 634 };
-            var controlBrush = CreateSolidBrush(PaletteButton);
-            FillRect(hdc, ref minus, controlBrush);
-            FillRect(hdc, ref plus, controlBrush);
-            DeleteObject(controlBrush);
+            FillRoundedRect(hdc, minus, PaletteButton, 6);
+            FillRoundedRect(hdc, plus, PaletteButton, 6);
             SetTextColor(hdc, PaletteText);
             DrawText(hdc, "−", -1, ref minus, TextButtonCentered);
             DrawText(hdc, "+", -1, ref plus, TextButtonCentered);
@@ -2148,7 +2250,7 @@ internal static class Program
                 LedEdge.Bottom => settings.Bottom,
                 _ => settings.Left
             };
-            SetTextColor(hdc, PaletteSecondary);
+            SetTextColor(hdc, focusedLedEdge == edge ? PaletteAccentPink : PaletteSecondary);
             var label = new Rect { Left = left + 38, Top = 606, Right = left + 132, Bottom = 634 };
             DrawText(hdc, $"{edge.ToString().ToUpperInvariant()}  {count}", -1, ref label, TextButtonCentered);
         }
@@ -2183,27 +2285,23 @@ internal static class Program
         var labels = tuningLabelCache;
         SetTextColor(hdc, PaletteAccentTeal);
         var heading = new Rect { Left = 32, Top = 444, Right = 870, Bottom = 462 };
-        DrawText(hdc, "SCREEN SYNC TUNING  ·  CLICK − / + TO ADJUST", -1, ref heading, 0x00000000);
+        DrawSectionText(hdc, "SCREEN SYNC TUNING  ·  CLICK A VALUE, USE ← / →", ref heading, 0x00000000);
         for (var i = 0; i < labels.Length; i++)
         {
             var row = i < 5 ? 0 : i < 9 ? 1 : 2;
             var column = row == 0 ? i : row == 1 ? i - 5 : i - 9;
-            var x = 32 + column * 168;
+            var x = (row == 0 ? 32 : 116) + column * 168;
             var y = row switch { 0 => 466, 1 => 504, _ => 542 };
             var control = new Rect { Left = x, Top = y, Right = x + 162, Bottom = y + 34 };
-            var background = CreateSolidBrush(PalettePanel);
-            FillRect(hdc, ref control, background);
-            DeleteObject(background);
+            FillRoundedRect(hdc, control, PalettePanel, 7);
             var minus = new Rect { Left = x + 2, Top = y + 3, Right = x + 28, Bottom = y + 31 };
             var plus = new Rect { Left = x + 134, Top = y + 3, Right = x + 160, Bottom = y + 31 };
-            var button = CreateSolidBrush(PaletteButton);
-            FillRect(hdc, ref minus, button);
-            FillRect(hdc, ref plus, button);
-            DeleteObject(button);
+            FillRoundedRect(hdc, minus, PaletteButton, 6);
+            FillRoundedRect(hdc, plus, PaletteButton, 6);
             SetTextColor(hdc, PaletteText);
             DrawText(hdc, "−", -1, ref minus, TextButtonCentered);
             DrawText(hdc, "+", -1, ref plus, TextButtonCentered);
-            SetTextColor(hdc, PaletteSecondary);
+            SetTextColor(hdc, focusedTuningSetting == (ScreenSyncTuning)i ? PaletteAccentPink : PaletteSecondary);
             var value = new Rect { Left = x + 29, Top = y + 3, Right = x + 133, Bottom = y + 31 };
             DrawText(hdc, labels[i], -1, ref value, TextButtonCentered);
         }
@@ -2224,20 +2322,23 @@ internal static class Program
 
     private static void DrawPreference(IntPtr hdc, Rect rect, string label, bool enabled)
     {
-        var brush = CreateSolidBrush(enabled ? PaletteActive : PaletteButton);
-        FillRect(hdc, ref rect, brush);
-        DeleteObject(brush);
+        FillRoundedRect(hdc, rect, enabled ? PaletteActive : PaletteButton, 8);
         SetTextColor(hdc, enabled ? PaletteText : PaletteSecondary);
         DrawText(hdc, label, -1, ref rect, TextButtonCentered);
     }
 
     private static void DrawHeaderAction(IntPtr hdc, Rect rect, string label)
     {
-        var brush = CreateSolidBrush(PaletteButton);
-        FillRect(hdc, ref rect, brush);
-        DeleteObject(brush);
+        FillRoundedRect(hdc, rect, PaletteButton, 8);
         SetTextColor(hdc, PaletteText);
         DrawText(hdc, label, -1, ref rect, TextButtonCentered);
+    }
+
+    private static void ApplyDarkTitleBar(IntPtr hwnd)
+    {
+        var enabled = 1;
+        if (DwmSetWindowAttribute(hwnd, DwmwaUseImmersiveDarkMode, ref enabled, sizeof(int)) != 0)
+            _ = DwmSetWindowAttribute(hwnd, DwmwaUseImmersiveDarkModeLegacy, ref enabled, sizeof(int));
     }
 
     private static void SetCaption(IntPtr hwnd, string text)
@@ -2307,6 +2408,7 @@ internal static class Program
         public Point Reserved, MaxSize, MaxPosition, MinTrackSize, MaxTrackSize;
     }
     [StructLayout(LayoutKind.Sequential)] private struct Rect { public int Left, Top, Right, Bottom; }
+    [StructLayout(LayoutKind.Sequential)] private struct Size { public int Width, Height; }
     [StructLayout(LayoutKind.Sequential)] private struct PaintStruct { public IntPtr Dc; public int Erase; public Rect Paint; public int Restore, IncUpdate; [MarshalAs(UnmanagedType.ByValArray, SizeConst = 32)] public byte[] Reserved; }
     [StructLayout(LayoutKind.Sequential)] private struct Message { public IntPtr Window; public uint Id; public UIntPtr WParam; public IntPtr LParam; public uint Time; public Point Point; }
 
@@ -2323,6 +2425,7 @@ internal static class Program
     [DllImport("user32.dll")] private static extern void PostQuitMessage(int exitCode);
     [DllImport("user32.dll", EntryPoint = "SendMessageW", CharSet = CharSet.Unicode, ExactSpelling = true)] private static extern IntPtr SendMessage(IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam);
     [DllImport("user32.dll", EntryPoint = "SetWindowTextW", CharSet = CharSet.Unicode, ExactSpelling = true)] private static extern bool SetWindowText(IntPtr hwnd, [MarshalAs(UnmanagedType.LPWStr)] string text);
+    [DllImport("dwmapi.dll", EntryPoint = "DwmSetWindowAttribute", ExactSpelling = true)] private static extern int DwmSetWindowAttribute(IntPtr hwnd, uint attribute, ref int value, int valueSize);
     [DllImport("user32.dll", EntryPoint = "GetWindowTextLengthW", ExactSpelling = true)] private static extern int GetWindowTextLength(IntPtr hwnd);
     [DllImport("user32.dll", SetLastError = true)] private static extern UIntPtr SetTimer(IntPtr hwnd, UIntPtr timerId, uint milliseconds, IntPtr callback);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool KillTimer(IntPtr hwnd, UIntPtr timerId);
@@ -2357,8 +2460,12 @@ internal static class Program
     [DllImport("gdi32.dll")] private static extern bool BitBlt(IntPtr destination, int x, int y, int width, int height,
         IntPtr source, int sourceX, int sourceY, uint rasterOperation);
     [DllImport("user32.dll")] private static extern int FillRect(IntPtr hdc, ref Rect rect, IntPtr brush);
+    [DllImport("gdi32.dll", SetLastError = true)] private static extern IntPtr CreateRoundRectRgn(int left, int top, int right, int bottom, int ellipseWidth, int ellipseHeight);
+    [DllImport("gdi32.dll")] private static extern bool FillRgn(IntPtr hdc, IntPtr region, IntPtr brush);
     [DllImport("gdi32.dll")] private static extern int SetBkMode(IntPtr hdc, int mode);
     [DllImport("gdi32.dll")] private static extern uint SetTextColor(IntPtr hdc, uint color);
+    [DllImport("gdi32.dll", EntryPoint = "GetTextExtentPoint32W", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    private static extern bool GetTextExtentPoint32W(IntPtr hdc, string text, int length, out Size size);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int DrawText(IntPtr hdc, string text, int count, ref Rect rect, uint format);
     [DllImport("user32.dll")] private static extern bool DrawIconEx(IntPtr hdc, int x, int y, IntPtr icon, int width, int height, uint step, IntPtr brush, uint flags);
     [DllImport("gdi32.dll")] private static extern IntPtr CreateSolidBrush(uint color);
