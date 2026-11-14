@@ -48,8 +48,6 @@ public sealed class FrameProcessor
         }
         var points = cachedPoints;
         if (destination.Length < points.Count) throw new ArgumentException("Destination is shorter than the LED layout.", nameof(destination));
-        Span<int> edgeIndices = stackalloc int[4];
-        edgeIndices.Clear();
         var next = destination[..points.Count];
         Span<LinearSample> samples = stackalloc LinearSample[MaxSamplesPerLed];
         Span<double> luminances = stackalloc double[MaxSamplesPerLed];
@@ -66,8 +64,10 @@ public sealed class FrameProcessor
         for (var i = 0; i < points.Count; i++)
         {
             var p = points[i];
-            var edgeIndex = edgeIndices[(int)p.Edge]++;
             var edgeCount = p.Edge switch { LedEdge.Top => layout.Top, LedEdge.Right => layout.Right, LedEdge.Bottom => layout.Bottom, _ => layout.Left };
+            // Use the mapped position so edges traversed in reverse sample matching screen segments.
+            var edgePosition = p.Edge is LedEdge.Top or LedEdge.Bottom ? p.U : p.V;
+            var edgeIndex = Math.Clamp((int)(edgePosition * edgeCount), 0, edgeCount - 1);
             int x0, x1, y0, y1;
             switch (p.Edge)
             {
