@@ -19,7 +19,7 @@ internal static class Program
         PickerMessageMouseMove = 0x0200, PickerMessageKeyDown = 0x0100, PickerMessageChar = 0x0102;
     private const int UiLogicalWidth = NativeUiWindowPolicy.LogicalWidth, UiLogicalHeight = NativeUiWindowPolicy.LogicalHeight;
     private const int PickerLogicalWidth = 700, PickerLogicalHeight = 640;
-    private const uint PickerWindowStyle = 0x00C80000, PickerExtendedWindowStyle = 0x00000080;
+    private const uint PickerWindowStyle = 0x00C80000, PickerExtendedWindowStyle = 0;
     private const uint DwmwaUseImmersiveDarkMode = 20, DwmwaUseImmersiveDarkModeLegacy = 19;
     private const int EmbeddedApplicationIconResourceId = 32512;
     private const uint LoadImageDefaultSize = 0x0040;
@@ -687,12 +687,6 @@ internal static class Program
 
                     var (x, y) = ColorPickerClientPoint(hwnd, lParam);
                     focusedHueBand = focusedHueParameter = -1;
-                    if (y is >= 21 and < 53 && x is >= 634 and < 666)
-                    {
-                        ClearCalibrationPreview();
-                        DestroyWindow(hwnd);
-                        return IntPtr.Zero;
-                    }
                     for (var i = 0; i < BaseColorPresets.All.Count; i++)
                     {
                         var left = 45 + i % 4 * 155;
@@ -983,8 +977,6 @@ internal static class Program
             var previousTitleFont = pickerTitleFont != IntPtr.Zero ? SelectObject(hdc, pickerTitleFont) : IntPtr.Zero;
             DrawText(hdc, "CUSTOM COLOR PICKER", -1, ref header, TextButtonCentered);
             if (previousTitleFont != IntPtr.Zero && previousTitleFont != new IntPtr(-1)) _ = SelectObject(hdc, previousTitleFont);
-            DrawColorPickerButton(hdc, new Rect { Left = 634, Top = 21, Right = 666, Bottom = 53 }, "×", PaletteButton);
-
             var preview = new Rect { Left = 40, Top = 76, Right = 132, Bottom = 118 };
             var previewBrush = CreateSolidBrush(ColorRef(pendingPickerColor));
             FillRect(hdc, ref preview, previewBrush);
@@ -1023,7 +1015,7 @@ internal static class Program
             SetTextColor(hdc, PaletteAccentTeal);
             var correction = settings;
             var gainHeading = new Rect { Left = 40, Top = 408, Right = 660, Bottom = 428 };
-            DrawSectionText(hdc, "HUE CORRECTIONS  ·  CLICK A VALUE, USE ← / →", ref gainHeading, TextButtonCentered);
+            DrawSectionText(hdc, "HUE CORRECTIONS", ref gainHeading, TextButtonCentered);
             var correctionValues = new[]
             {
                 new[] { $"{correction.HueCorrectionStart}°", $"{correction.HueCorrectionEnd}°", $"{correction.HueCorrectionRedGain}%", $"{correction.HueCorrectionGreenGain}%", $"{correction.HueCorrectionBlueGain}%" },
@@ -2231,7 +2223,7 @@ internal static class Program
     {
         SetTextColor(hdc, PaletteAccentTeal);
         var heading = new Rect { Left = 80, Top = 581, Right = 820, Bottom = 603 };
-        DrawSectionText(hdc, "LED LAYOUT  ·  CLICK A VALUE, USE ← / →", ref heading, 0x00000000);
+        DrawSectionText(hdc, "LED LAYOUT", ref heading, 0x00000000);
         for (var i = 0; i < 4; i++)
         {
             var edge = (LedEdge)i;
@@ -2285,7 +2277,7 @@ internal static class Program
         var labels = tuningLabelCache;
         SetTextColor(hdc, PaletteAccentTeal);
         var heading = new Rect { Left = 32, Top = 444, Right = 870, Bottom = 462 };
-        DrawSectionText(hdc, "SCREEN SYNC TUNING  ·  CLICK A VALUE, USE ← / →", ref heading, 0x00000000);
+        DrawSectionText(hdc, "SCREEN SYNC TUNING", ref heading, 0x00000000);
         for (var i = 0; i < labels.Length; i++)
         {
             var row = i < 5 ? 0 : i < 9 ? 1 : 2;
