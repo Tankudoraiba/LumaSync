@@ -3,23 +3,27 @@ using System.Runtime.InteropServices;
 
 namespace LumaSync;
 
-/// <summary>Gives the controller's composite-keyboard lock LED report a short quiet window.</summary>
+/// <summary>Prevents keyboard indicator and Windows-key shortcut reports from colliding with LED frames.</summary>
 internal static class KeyboardLockEventGate
 {
     private const int WhKeyboardLl = 13;
-    private const uint WmKeyDown = 0x0100, WmSysKeyDown = 0x0104;
-    private const uint VkCapsLock = 0x14, VkNumLock = 0x90, VkScrollLock = 0x91;
+    private const uint WmKeyDown = 0x0100, WmKeyUp = 0x0101, WmSysKeyDown = 0x0104, WmSysKeyUp = 0x0105;
+    private const uint VkCapsLock = 0x14, VkLWin = 0x5B, VkRWin = 0x5C, VkNumLock = 0x90, VkScrollLock = 0x91;
     private const int QuietMilliseconds = 8;
+    private const int MaximumWindowsShortcutPauseMilliseconds = 3000;
     private static readonly long QuietTicks = Stopwatch.Frequency * QuietMilliseconds / 1000;
+    private static readonly long MaximumWindowsShortcutPauseTicks = Stopwatch.Frequency * MaximumWindowsShortcutPauseMilliseconds / 1000;
     private static readonly LowLevelKeyboardProc Callback = HookCallback;
     private static IntPtr hook;
-    private static long lastLockKeyEvent;
-    private static long lockKeyEventCount;
+    private static long lastKeyboardOutputEvent;
+    private static long keyboardOutputEventCount;
+    private static long windowsShortcutStarted;
     private static long interruptedFrameCount;
+    private static int windowsKeyDown, windowsShortcutActive, windowsShortcutTimedOut;
 
     public static bool IsInstalled => hook != IntPtr.Zero;
-    public static long LastLockKeyEvent => Interlocked.Read(ref lastLockKeyEvent);
-    public static long LockKeyEventCount => Interlocked.Read(ref lockKeyEventCount);
+    public static long LastKeyboardOutputEvent => Interlocked.Read(ref lastKeyboardOutputEvent);
+    public static long KeyboardOutputEventCount => Interlocked.Read(ref keyboardOutputEventCount);
     public static long InterruptedFrameCount => Interlocked.Read(ref interruptedFrameCount);
 
     public static bool Install(IntPtr module)
@@ -40,7 +44,18 @@ internal static class KeyboardLockEventGate
     {
         while (true)
         {
-            var last = LastLockKeyEvent;
+            if (Volatile.Read(ref windowsShortcutActive) != 0)
+            {
+                if (Stopwatch.GetTimestamp() - Interlocked.Read(ref windowsShortcutStarted) < MaximumWindowsShortcutPauseTicks)
+                {
+                    Thread.Sleep(1);
+                    continue;
+                }
+                Interlocked.Exchange(ref windowsShortcutActive, 0);
+                Interlocked.Exchange(ref windowsShortcutTimedOut, 1);
+                RecordKeyboardOutputEvent();
+            }
+            var last = LastKeyboardOutputEvent;
             if (last == 0 || Stopwatch.GetTimestamp() - last >= QuietTicks) return;
             Thread.Sleep(1);
         }
@@ -50,16 +65,55 @@ internal static class KeyboardLockEventGate
 
     private static IntPtr HookCallback(int code, UIntPtr message, IntPtr data)
     {
-        if (code >= 0 && message.ToUInt32() is WmKeyDown or WmSysKeyDown)
+        if (code >= 0)
         {
-            var key = Marshal.PtrToStructure<KeyboardData>(data).VirtualKey;
-            if (key is VkCapsLock or VkNumLock or VkScrollLock)
+            var messageId = message.ToUInt32();
+            var keyDown = messageId is WmKeyDown or WmSysKeyDown;
+            var keyUp = messageId is WmKeyUp or WmSysKeyUp;
+            if (keyDown || keyUp)
             {
-                Interlocked.Exchange(ref lastLockKeyEvent, Stopwatch.GetTimestamp());
-                Interlocked.Increment(ref lockKeyEventCount);
+                var key = Marshal.PtrToStructure<KeyboardData>(data).VirtualKey;
+                if (keyDown)
+                {
+                    if (key is VkLWin or VkRWin)
+                    {
+                        Interlocked.Exchange(ref windowsKeyDown, 1);
+                        if (Volatile.Read(ref windowsShortcutTimedOut) == 0)
+                        {
+                            if (Interlocked.Exchange(ref windowsShortcutActive, 1) == 0)
+                                Interlocked.Exchange(ref windowsShortcutStarted, Stopwatch.GetTimestamp());
+                            RecordKeyboardOutputEvent();
+                        }
+                    }
+                    else if (Volatile.Read(ref windowsKeyDown) != 0 && Volatile.Read(ref windowsShortcutTimedOut) == 0)
+                    {
+                        RecordKeyboardOutputEvent();
+                    }
+                    if (key is VkCapsLock or VkNumLock or VkScrollLock)
+                        RecordKeyboardOutputEvent();
+                }
+                else
+                {
+                    if (key is VkLWin or VkRWin)
+                    {
+                        if (Volatile.Read(ref windowsShortcutActive) != 0)
+                            RecordKeyboardOutputEvent();
+                        Interlocked.Exchange(ref windowsKeyDown, 0);
+                        Interlocked.Exchange(ref windowsShortcutActive, 0);
+                        Interlocked.Exchange(ref windowsShortcutTimedOut, 0);
+                    }
+                    else if (Volatile.Read(ref windowsKeyDown) != 0 && Volatile.Read(ref windowsShortcutActive) != 0)
+                        RecordKeyboardOutputEvent();
+                }
             }
         }
         return CallNextHookEx(hook, code, message, data);
+    }
+
+    private static void RecordKeyboardOutputEvent()
+    {
+        Interlocked.Exchange(ref lastKeyboardOutputEvent, Stopwatch.GetTimestamp());
+        Interlocked.Increment(ref keyboardOutputEventCount);
     }
 
     [StructLayout(LayoutKind.Sequential)]

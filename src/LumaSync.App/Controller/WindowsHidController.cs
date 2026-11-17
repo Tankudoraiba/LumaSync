@@ -64,25 +64,25 @@ public sealed class WindowsHidController : ILightingController
         lock (writeLock)
         {
             KeyboardLockEventGate.WaitForQuietPeriod();
-            var lastLockEvent = KeyboardLockEventGate.LastLockKeyEvent;
+            var lastKeyboardEvent = KeyboardLockEventGate.LastKeyboardOutputEvent;
             while (true)
             {
                 var interrupted = false;
                 for (var offset = 0; offset < frame.Length; offset += 64)
                 {
-                    if (KeyboardLockEventGate.LastLockKeyEvent != lastLockEvent)
+                    if (KeyboardLockEventGate.LastKeyboardOutputEvent != lastKeyboardEvent)
                     {
                         KeyboardLockEventGate.WaitForQuietPeriod();
-                        lastLockEvent = KeyboardLockEventGate.LastLockKeyEvent;
+                        lastKeyboardEvent = KeyboardLockEventGate.LastKeyboardOutputEvent;
                         interrupted = true;
                         break;
                     }
 
                     KeyboardLockEventGate.WaitForQuietPeriod();
-                    var quietEvent = KeyboardLockEventGate.LastLockKeyEvent;
-                    if (quietEvent != lastLockEvent)
+                    var quietEvent = KeyboardLockEventGate.LastKeyboardOutputEvent;
+                    if (quietEvent != lastKeyboardEvent)
                     {
-                        lastLockEvent = quietEvent;
+                        lastKeyboardEvent = quietEvent;
                         interrupted = true;
                         break;
                     }
@@ -92,18 +92,18 @@ public sealed class WindowsHidController : ILightingController
                     if (!handle.TryWriteOnce(screenSyncReport, 250, out var transferred) || transferred != screenSyncReport.Length)
                         throw new IOException($"HID frame write failed or was short (Win32 {Marshal.GetLastWin32Error()}, {transferred}/{screenSyncReport.Length} bytes).");
 
-                    var writeEvent = KeyboardLockEventGate.LastLockKeyEvent;
-                    if (writeEvent != lastLockEvent)
+                    var writeEvent = KeyboardLockEventGate.LastKeyboardOutputEvent;
+                    if (writeEvent != lastKeyboardEvent)
                     {
                         KeyboardLockEventGate.WaitForQuietPeriod();
-                        lastLockEvent = KeyboardLockEventGate.LastLockKeyEvent;
+                        lastKeyboardEvent = KeyboardLockEventGate.LastKeyboardOutputEvent;
                         interrupted = true;
                         break;
                     }
                 }
-                if (!interrupted && KeyboardLockEventGate.LastLockKeyEvent == lastLockEvent) return;
+                if (!interrupted && KeyboardLockEventGate.LastKeyboardOutputEvent == lastKeyboardEvent) return;
                 KeyboardLockEventGate.RecordInterruptedFrame();
-                lastLockEvent = KeyboardLockEventGate.LastLockKeyEvent;
+                lastKeyboardEvent = KeyboardLockEventGate.LastKeyboardOutputEvent;
             }
         }
     }

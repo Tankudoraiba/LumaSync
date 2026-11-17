@@ -88,6 +88,7 @@ internal static class Program
     private static IntPtr uiFont, brandTitleFont, sectionFont, pickerTitleFont;
     private static bool trayAvailable;
     private static bool explicitExit;
+    private static bool endSessionPrepared;
     private static bool startWithWindows;
     private static bool showDiagnostics;
     private static long processedFrames, queuedFrames, outputFrames, droppedCaptureFrames;
@@ -388,8 +389,26 @@ internal static class Program
                         explicitExit = true;
                         DestroyWindow(hwnd);
                     }
+                    else if (endSessionPrepared)
+                    {
+                        endSessionPrepared = false;
+                        if (StopCaptureWorker(TimeSpan.FromSeconds(10)))
+                        {
+                            try { StartCaptureWorker(hwnd); }
+                            catch (Exception ex)
+                            {
+                                status = "Screen capture reconnecting · " + ex.Message;
+                                Interlocked.Exchange(ref captureRetryAt, Stopwatch.GetTimestamp() + 3 * Stopwatch.Frequency);
+                            }
+                        }
+                        else Interlocked.Exchange(ref captureRetryAt, Stopwatch.GetTimestamp());
+                        InvalidateRect(hwnd, IntPtr.Zero, false);
+                    }
                     return IntPtr.Zero;
                 case WindowMessageQueryEndSession:
+                    endSessionPrepared = true;
+                    if (!StopCaptureWorker(TimeSpan.FromSeconds(10)))
+                        status = "Shutting down · waiting for LED controller to turn off";
                     return new IntPtr(1);
                 case WindowMessageDestroy:
                     _ = KillTimer(hwnd, DiagnosticsTimerId);
@@ -1432,14 +1451,14 @@ internal static class Program
         }
     }
 
-    private static bool StopCaptureWorker()
+    private static bool StopCaptureWorker(TimeSpan? timeout = null)
     {
         captureCancellation?.Cancel();
         if (captureTask is not null)
         {
             try
             {
-                if (!captureTask.Wait(TimeSpan.FromSeconds(3))) return false;
+                if (!captureTask.Wait(timeout ?? TimeSpan.FromSeconds(3))) return false;
             }
             catch (AggregateException) { }
             captureTask = null;
@@ -1893,7 +1912,7 @@ internal static class Program
         var latencyMs = Interlocked.Read(ref lastEndToEndTicks) * 1000d / Stopwatch.Frequency;
         var device = Interlocked.CompareExchange(ref controllerConnected, 0, 0) == 0 ? "HID WAIT" : "HID OK";
         var gate = KeyboardLockEventGate.IsInstalled ? "HOOK ON" : "HOOK OFF";
-        return $"CAP {captureFps:0.0} | OUT {outputFps:0.0} | USB {usbMs:0.0} ms | LAT {latencyMs:0.0} ms | DROP {Interlocked.Read(ref droppedCaptureFrames)} | LOCK {KeyboardLockEventGate.LockKeyEventCount}/{KeyboardLockEventGate.InterruptedFrameCount} | {gate} | {device}";
+        return $"CAP {captureFps:0.0} | OUT {outputFps:0.0} | USB {usbMs:0.0} ms | LAT {latencyMs:0.0} ms | DROP {Interlocked.Read(ref droppedCaptureFrames)} | KEY {KeyboardLockEventGate.KeyboardOutputEventCount}/{KeyboardLockEventGate.InterruptedFrameCount} | {gate} | {device}";
     }
 
     private static void UpdateDiagnosticRates()
