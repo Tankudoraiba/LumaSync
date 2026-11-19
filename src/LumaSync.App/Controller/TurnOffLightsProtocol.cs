@@ -8,7 +8,7 @@ public static class TurnOffLightsProtocol
     public static byte[] BuildCommand(byte sequence)
     {
         if (sequence is 0 or 255) throw new ArgumentOutOfRangeException(nameof(sequence));
-        byte[] command = [0x52, 0x42, 0x05, sequence, 0x97, 0x00];
+        byte[] command = [0x52, 0x42, 0x06, sequence, 0x97, 0x00];
         byte checksum = 0;
         for (var i = 0; i < command.Length - 1; i++) checksum = unchecked((byte)(checksum + command[i]));
         command[^1] = checksum;
