@@ -117,6 +117,23 @@ public sealed class WindowsHidController : ILightingController
             throw new IOException($"Static-color HID write failed or was short (Win32 {Marshal.GetLastWin32Error()}, {transferred}/65 bytes).");
     }
 
+    public void TurnOffLights(byte sequence)
+    {
+        IOException? lastFailure = null;
+        lock (writeLock)
+        {
+            for (var i = 0; i < TurnOffLightsProtocol.SendCount; i++)
+            {
+                var command = TurnOffLightsProtocol.BuildCommand(TurnOffLightsProtocol.SequenceAt(sequence, i));
+                var report = new byte[65]; // report ID zero plus the command and zero padding
+                command.CopyTo(report, 1);
+                if (!handle.TryWriteOnce(report, 250, out var transferred) || transferred != report.Length)
+                    lastFailure = new IOException($"Turn-off HID write failed or was short (Win32 {Marshal.GetLastWin32Error()}, {transferred}/65 bytes).");
+            }
+        }
+        if (lastFailure is not null) throw lastFailure;
+    }
+
     public void Dispose() => handle.Dispose();
 
     private static Guid GetHidGuid() { HidD_GetHidGuid(out var guid); return guid; }

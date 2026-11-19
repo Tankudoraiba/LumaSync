@@ -16,6 +16,8 @@ LumaSync sends `SC` lighting frames through the HID output interface. A frame ha
 
 Device information is read during connection so the app can confirm the reported LED count and firmware before sending lighting frames. The application does not contain firmware-writing commands.
 
+When the capture worker exits, LumaSync sends the controller's dedicated `0x97` turn-off command four times, following DX Light's shutdown behavior. This is separate from screen-sync frames, which only set LED colors and may not reliably switch the controller output off during Windows shutdown.
+
 ## Update rates
 
 Screen capture and lighting output can be configured for 30, 60, or 75 Hz, subject to display and controller performance. The 75 Hz option matches the configured 75 Hz monitor setup.

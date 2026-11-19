@@ -1862,8 +1862,7 @@ internal static class Program
                 {
                     try
                     {
-                        var shutdownFrame = ShutdownFrameSender.BuildBlackFrame(controller.Info.LedCount, NextSequence());
-                        controller.WriteScreenSyncFrame(shutdownFrame);
+                        controller.TurnOffLights(NextSequence());
                     }
                     catch (Exception) { }
                     controller.Dispose();
